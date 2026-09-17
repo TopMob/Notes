@@ -1177,22 +1177,61 @@
   color: var(--status-danger);
 }
 
+.dropdown-item.danger:hover {
+  background-color: rgba(224, 60, 49, 0.08);
+  color: var(--status-danger);
+}
+
+.item-context-menu {
+  right: 2px;
+  left: auto;
+  width: 175px;
+  min-width: 175px;
+  z-index: 500;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.section-color-selector {
+  padding: 6px 8px;
+  border-top: 1px solid var(--hairline-subtle);
+  border-bottom: 1px solid var(--hairline-subtle);
+  margin: 4px 0;
+}
+
+.color-selector-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  display: block;
+  margin-bottom: 6px;
+}
+
 .color-picker-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
   gap: 6px;
-  padding: 6px var(--sp-2);
+  padding: 0;
 }
 
 .mini-color-dot {
-  width: 16px;
-  height: 16px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
+  border: none;
   cursor: pointer;
-  transition: transform var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .mini-color-dot:hover {
-  transform: scale(1.2);
+  transform: scale(1.18);
+}
+
+.mini-color-dot.active {
+  box-shadow: 0 0 0 2px var(--bg-card), 0 0 0 4px var(--brand-onenote);
 }
 
 /* Модальные окна */
@@ -1536,3 +1575,359 @@
 .infinite-canvas-viewport.tool-stroke-eraser {
   cursor: none;
 }
+
+/* =========================================
+   7. КАСТОМНЫЕ МОДАЛЬНЫЕ ОКНА И КОРЗИНА
+   ========================================= */
+.app-title-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.trash-header-btn {
+  color: var(--ink-secondary);
+}
+
+.trash-header-btn:hover {
+  color: var(--status-danger);
+}
+
+/* Модальное окно создания раздела */
+.create-section-modal {
+  max-width: 440px;
+}
+
+.modal-header-title-group {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.modal-header-title-group .warning-icon {
+  color: #f59e0b;
+}
+
+.form-group {
+  margin-bottom: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.form-input {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background-color: var(--bg-canvas);
+  color: var(--ink);
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.form-input:focus {
+  border-color: var(--brand-onenote);
+  box-shadow: 0 0 0 2px var(--brand-onenote-light);
+}
+
+.color-palette-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.palette-color-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.palette-color-swatch:hover {
+  transform: scale(1.12);
+}
+
+.palette-color-swatch.selected {
+  box-shadow: 0 0 0 3px var(--bg-card), 0 0 0 5px var(--brand-onenote);
+}
+
+/* Модальное окно подтверждения удаления */
+.confirm-delete-modal {
+  max-width: 420px;
+}
+
+.confirm-message {
+  font-size: 14px;
+  color: var(--ink);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.confirm-item-title {
+  color: var(--brand-onenote);
+}
+
+.confirm-hint {
+  font-size: 12px;
+  color: var(--ink-muted);
+  line-height: 1.4;
+}
+
+.btn-danger {
+  background-color: var(--status-danger);
+  color: #fff;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--r-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.btn-danger:hover {
+  background-color: #c93026;
+}
+
+/* Модальное окно Корзины */
+.trash-modal {
+  max-width: 620px;
+  height: 70vh;
+  max-height: 580px;
+}
+
+.trash-modal-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trash-title-icon {
+  color: var(--status-danger);
+}
+
+.trash-badge-count {
+  background-color: var(--bg-hover);
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+
+.trash-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-2) var(--sp-4);
+  background-color: var(--bg-app);
+  border-bottom: 1px solid var(--hairline-subtle);
+}
+
+.trash-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.trash-tab-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: var(--r-sm);
+  color: var(--ink-secondary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.trash-tab-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--ink);
+}
+
+.trash-tab-btn.active {
+  background-color: var(--bg-card);
+  color: var(--brand-onenote);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-empty-trash {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--status-danger);
+  border-radius: var(--r-sm);
+  transition: background var(--transition-fast);
+}
+
+.btn-empty-trash:hover {
+  background-color: rgba(224, 60, 49, 0.08);
+}
+
+.trash-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.trash-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.trash-empty-icon-wrapper {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background-color: var(--bg-app);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-muted);
+  margin-bottom: 16px;
+}
+
+.trash-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+
+.trash-empty-subtitle {
+  font-size: 13px;
+  color: var(--ink-muted);
+  max-width: 340px;
+  line-height: 1.5;
+}
+
+.trash-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trash-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--hairline-subtle);
+  border-radius: var(--r-md);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.trash-item:hover {
+  border-color: var(--hairline);
+  box-shadow: var(--shadow-sm);
+}
+
+.trash-item-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.trash-item-icon-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trash-type-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: rgba(16, 124, 65, 0.1);
+  color: #107c41;
+}
+
+.trash-type-badge.page-badge {
+  background-color: rgba(0, 120, 212, 0.1);
+  color: #0078d4;
+}
+
+.trash-item-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.trash-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trash-item-date {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.trash-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trash-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 9px;
+  font-size: 12px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.trash-action-btn.restore {
+  background-color: var(--bg-hover);
+  color: var(--ink);
+}
+
+.trash-action-btn.restore:hover {
+  background-color: var(--brand-onenote-light);
+  color: var(--brand-onenote);
+}
+
+.trash-action-btn.permanent-delete {
+  background-color: transparent;
+  color: var(--ink-muted);
+}
+
+.trash-action-btn.permanent-delete:hover {
+  background-color: rgba(224, 60, 49, 0.08);
+  color: var(--status-danger);
+}
+

@@ -13,6 +13,7 @@ export interface Section {
   title: string;
   color: string;
   order: number;
+  deletedAt?: number | null;
 }
 
 export interface Page {
@@ -23,6 +24,7 @@ export interface Page {
   order: number;
   camera: Camera;
   background: CanvasBackground;
+  deletedAt?: number | null;
 }
 
 export const SECTION_COLORS = [

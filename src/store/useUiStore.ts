@@ -12,6 +12,9 @@ interface UiState {
   isExportOpen: boolean;
   isSettingsOpen: boolean;
   isCloudSettingsOpen: boolean;
+  isTrashOpen: boolean;
+  isCreateSectionOpen: boolean;
+  deleteConfirm: { isOpen: boolean; type: 'section' | 'page'; id: string; title: string } | null;
   isFloatingPaletteOpen: boolean;
 
   setTheme: (theme: 'light' | 'dark') => void;
@@ -24,6 +27,10 @@ interface UiState {
   setExportOpen: (open: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
   setCloudSettingsOpen: (open: boolean) => void;
+  setTrashOpen: (open: boolean) => void;
+  setCreateSectionOpen: (open: boolean) => void;
+  openDeleteConfirm: (type: 'section' | 'page', id: string, title: string) => void;
+  closeDeleteConfirm: () => void;
   toggleFloatingPalette: () => void;
 }
 
@@ -37,6 +44,9 @@ export const useUiStore = create<UiState>((set, get) => ({
   isExportOpen: false,
   isSettingsOpen: false,
   isCloudSettingsOpen: false,
+  isTrashOpen: false,
+  isCreateSectionOpen: false,
+  deleteConfirm: null,
   isFloatingPaletteOpen: false,
 
   setTheme: (theme) => {
@@ -58,5 +68,9 @@ export const useUiStore = create<UiState>((set, get) => ({
   setExportOpen: (isExportOpen) => set({ isExportOpen }),
   setSettingsOpen: (isSettingsOpen) => set({ isSettingsOpen }),
   setCloudSettingsOpen: (isCloudSettingsOpen) => set({ isCloudSettingsOpen }),
+  setTrashOpen: (isTrashOpen) => set({ isTrashOpen }),
+  setCreateSectionOpen: (isCreateSectionOpen) => set({ isCreateSectionOpen }),
+  openDeleteConfirm: (type, id, title) => set({ deleteConfirm: { isOpen: true, type, id, title } }),
+  closeDeleteConfirm: () => set({ deleteConfirm: null }),
   toggleFloatingPalette: () => set((s) => ({ isFloatingPaletteOpen: !s.isFloatingPaletteOpen })),
 }));

@@ -1,13 +1,8 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
-  Grid,
-  Search,
   Maximize2,
   Minimize2,
-  Share2,
-  ChevronDown,
-  Edit3,
-  BookOpen,
+  Trash2,
   Settings,
 } from 'lucide-react';
 import { useNotebookStore } from '../../store/useNotebookStore';
@@ -16,96 +11,41 @@ import { SyncStatusBadge } from '../auth/SyncStatusBadge';
 import { AuthControls } from '../auth/AuthControls';
 
 export const Header: React.FC = () => {
-  const { notebooks, activeNotebook, selectNotebook } = useNotebookStore();
+  const { activeNotebook } = useNotebookStore();
   const {
     isZenMode,
     toggleZenMode,
-    setSearchOpen,
-    setExportOpen,
+    setTrashOpen,
     setSettingsOpen,
   } = useUiStore();
 
-  const [isNotebookMenuOpen, setIsNotebookMenuOpen] = useState(false);
-
   return (
     <header className="app-header">
-      {/* Левая группа: лаунчер, бренд OneNote, текущий блокнот */}
+      {/* Левая группа: бренд OneNote и название блокнота */}
       <div className="header-left">
-        <button
-          className="header-icon-btn launcher-btn"
-          title="Панель приложений"
-          aria-label="Панель приложений"
-        >
-          <Grid size={18} />
-        </button>
-
         <div className="brand-group">
-          <div className="onenote-logo" title="Microsoft OneNote">
+          <div className="onenote-logo" title="OneNote">
             <span>N</span>
           </div>
-
-          <div className="notebook-selector-wrapper">
-            <button
-              className="notebook-selector-btn"
-              onClick={() => setIsNotebookMenuOpen(!isNotebookMenuOpen)}
-              title="Переключить блокнот"
-            >
-              <span className="notebook-title">{activeNotebook?.title || 'колледж'}</span>
-              <ChevronDown size={14} className="chevron-icon" />
-            </button>
-
-            {isNotebookMenuOpen && (
-              <div className="dropdown-menu notebook-dropdown">
-                <div className="dropdown-header">Блокноты</div>
-                {notebooks.map((nb) => (
-                  <button
-                    key={nb.id}
-                    className={`dropdown-item ${nb.id === activeNotebook?.id ? 'active' : ''}`}
-                    onClick={() => {
-                      selectNotebook(nb);
-                      setIsNotebookMenuOpen(false);
-                    }}
-                  >
-                    <BookOpen size={16} />
-                    <span>{nb.title}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <span className="app-title-text">{activeNotebook?.title || 'Записная книжка'}</span>
         </div>
       </div>
 
-      {/* Центральная группа: Поиск */}
-      <div className="header-center">
-        <div className="search-bar" onClick={() => setSearchOpen(true)}>
-          <Search size={15} className="search-icon" />
-          <span className="search-placeholder">Что вы хотите сделать?</span>
-          <kbd className="search-shortcut">Ctrl+K</kbd>
-        </div>
-      </div>
+      {/* Центральная группа (свободное пространство для чистого вида) */}
+      <div className="header-center" />
 
-      {/* Правая группа: Статус синхронизации, режим, поделиться, тема, Zen, настройки, авторизация */}
+      {/* Правая группа: Статус синхронизации, Корзина, Zen-режим, Настройки, Авторизация */}
       <div className="header-right">
         {/* Индикатор синхронизации с облаком / локально */}
         <SyncStatusBadge />
 
-        {/* Режим: Редактирование */}
-        <div className="mode-badge" title="Режим работы">
-          <Edit3 size={14} />
-          <span>Редактирование</span>
-          <ChevronDown size={12} />
-        </div>
-
-        {/* Кнопка Поделиться / Экспорт */}
+        {/* Корзина (удалённые разделы и страницы) */}
         <button
-          className="btn-share"
-          onClick={() => setExportOpen(true)}
-          title="Экспортировать или поделиться"
+          className="header-icon-btn trash-header-btn"
+          onClick={() => setTrashOpen(true)}
+          title="Корзина (удалённые разделы и страницы)"
         >
-          <Share2 size={14} />
-          <span>Поделиться</span>
-          <ChevronDown size={12} />
+          <Trash2 size={16} />
         </button>
 
         {/* Zen-режим */}
@@ -132,3 +72,4 @@ export const Header: React.FC = () => {
     </header>
   );
 };
+

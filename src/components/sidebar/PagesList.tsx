@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Plus, MoreVertical, Trash2, Edit2 } from 'lucide-react';
 import { useNotebookStore } from '../../store/useNotebookStore';
+import { useUiStore } from '../../store/useUiStore';
 import { Page } from '../../types/notebook';
 
 export const PagesList: React.FC = () => {
@@ -9,13 +10,30 @@ export const PagesList: React.FC = () => {
     activePage,
     selectPage,
     addPage,
-    removePage,
     renamePage,
   } = useNotebookStore();
+
+  const { openDeleteConfirm } = useUiStore();
 
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [activeMenuPageId, setActiveMenuPageId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Закрытие контекстного меню при клике вне его
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setActiveMenuPageId(null);
+      }
+    };
+    if (activeMenuPageId) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [activeMenuPageId]);
 
   const handleAddPage = async () => {
     await addPage();
@@ -47,6 +65,7 @@ export const PagesList: React.FC = () => {
         {pages.map((page) => {
           const isActive = page.id === activePage?.id;
           const isEditing = page.id === editingPageId;
+          const isMenuOpen = activeMenuPageId === page.id;
 
           return (
             <div
@@ -81,17 +100,15 @@ export const PagesList: React.FC = () => {
                 <button
                   className="item-more-btn"
                   onClick={() =>
-                    setActiveMenuPageId(
-                      activeMenuPageId === page.id ? null : page.id
-                    )
+                    setActiveMenuPageId(isMenuOpen ? null : page.id)
                   }
                   title="Параметры страницы"
                 >
                   <MoreVertical size={13} />
                 </button>
 
-                {activeMenuPageId === page.id && (
-                  <div className="dropdown-menu item-context-menu">
+                {isMenuOpen && (
+                  <div ref={menuRef} className="dropdown-menu item-context-menu">
                     <button
                       className="dropdown-item"
                       onClick={() => handleStartRename(page)}
@@ -103,14 +120,12 @@ export const PagesList: React.FC = () => {
                       <button
                         className="dropdown-item danger"
                         onClick={() => {
-                          if (confirm(`Удалить страницу "${page.title}"?`)) {
-                            removePage(page.id);
-                          }
                           setActiveMenuPageId(null);
+                          openDeleteConfirm('page', page.id, page.title);
                         }}
                       >
                         <Trash2 size={13} />
-                        <span>Удалить</span>
+                        <span>Удалить в корзину</span>
                       </button>
                     )}
                   </div>

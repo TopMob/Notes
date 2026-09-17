@@ -51,13 +51,13 @@ export async function loadNotebooks(): Promise<Notebook[]> {
 export async function loadSections(notebookId: string): Promise<Section[]> {
   const db = await getDB();
   const sections = await db.getAllFromIndex('sections', 'by-notebook', notebookId);
-  return sections.sort((a, b) => a.order - b.order);
+  return sections.filter((s) => !s.deletedAt).sort((a, b) => a.order - b.order);
 }
 
 export async function loadPages(sectionId: string): Promise<Page[]> {
   const db = await getDB();
   const pages = await db.getAllFromIndex('pages', 'by-section', sectionId);
-  return pages.sort((a, b) => a.order - b.order);
+  return pages.filter((p) => !p.deletedAt).sort((a, b) => a.order - b.order);
 }
 
 export async function loadPageData(pageId: string): Promise<{
@@ -315,4 +315,107 @@ export async function deletePage(pageId: string): Promise<void> {
   syncEngine.notifyDelete({
     pageIds: [pageId],
   });
+}
+
+export async function updateSection(
+  sectionId: string,
+  updates: Partial<Pick<Section, 'title' | 'color' | 'order'>>
+): Promise<void> {
+  const db = await getDB();
+  const sec = await db.get('sections', sectionId);
+  if (sec) {
+    const updated: Section = { ...sec, ...updates };
+    await db.put('sections', updated);
+    syncEngine.notifyChange({ sections: [updated] });
+  }
+}
+
+export async function moveToTrashSection(sectionId: string): Promise<void> {
+  const db = await getDB();
+  const now = Date.now();
+  const tx = db.transaction(['sections', 'pages'], 'readwrite');
+  const sec = await tx.objectStore('sections').get(sectionId);
+  const pages = await tx.objectStore('pages').index('by-section').getAll(sectionId);
+  const pageIds: string[] = [];
+
+  if (sec) {
+    sec.deletedAt = now;
+    await tx.objectStore('sections').put(sec);
+  }
+
+  for (const p of pages) {
+    p.deletedAt = now;
+    pageIds.push(p.id);
+    await tx.objectStore('pages').put(p);
+  }
+
+  await tx.done;
+
+  syncEngine.notifyDelete({
+    sectionIds: [sectionId],
+    pageIds,
+  });
+}
+
+export async function restoreSection(sectionId: string): Promise<void> {
+  const db = await getDB();
+  const tx = db.transaction(['sections', 'pages'], 'readwrite');
+  const sec = await tx.objectStore('sections').get(sectionId);
+  const pages = await tx.objectStore('pages').index('by-section').getAll(sectionId);
+
+  if (sec) {
+    delete sec.deletedAt;
+    await tx.objectStore('sections').put(sec);
+  }
+
+  const restoredPages: Page[] = [];
+  for (const p of pages) {
+    delete p.deletedAt;
+    restoredPages.push(p);
+    await tx.objectStore('pages').put(p);
+  }
+
+  await tx.done;
+
+  if (sec) {
+    syncEngine.notifyChange({
+      sections: [sec],
+      pages: restoredPages,
+    });
+  }
+}
+
+export async function moveToTrashPage(pageId: string): Promise<void> {
+  const db = await getDB();
+  const now = Date.now();
+  const page = await db.get('pages', pageId);
+  if (page) {
+    page.deletedAt = now;
+    await db.put('pages', page);
+    syncEngine.notifyDelete({
+      pageIds: [pageId],
+    });
+  }
+}
+
+export async function restorePage(pageId: string): Promise<void> {
+  const db = await getDB();
+  const page = await db.get('pages', pageId);
+  if (page) {
+    delete page.deletedAt;
+    await db.put('pages', page);
+    syncEngine.notifyChange({
+      pages: [page],
+    });
+  }
+}
+
+export async function loadTrash(): Promise<{ sections: Section[]; pages: Page[] }> {
+  const db = await getDB();
+  const allSections = await db.getAll('sections');
+  const allPages = await db.getAll('pages');
+  return {
+    sections: allSections.filter((s) => !!s.deletedAt),
+    pages: allPages.filter((p) => !!p.deletedAt),
+  };
 }

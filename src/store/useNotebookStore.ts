@@ -10,6 +10,12 @@ import {
   deleteSection as dbDeleteSection,
   deletePage as dbDeletePage,
   updatePageMetadata,
+  updateSection as dbUpdateSection,
+  moveToTrashSection as dbMoveToTrashSection,
+  restoreSection as dbRestoreSection,
+  moveToTrashPage as dbMoveToTrashPage,
+  restorePage as dbRestorePage,
+  loadTrash as dbLoadTrash,
 } from '../db/storage';
 import { getDB } from '../db/idb';
 import { useCanvasStore } from './useCanvasStore';
@@ -35,6 +41,17 @@ interface NotebookState {
 
   addSection: (title?: string, color?: string) => Promise<Section>;
   addPage: (title?: string) => Promise<Page>;
+
+  renameSection: (sectionId: string, newTitle: string) => Promise<void>;
+  setSectionColor: (sectionId: string, color: string) => Promise<void>;
+  moveToTrashSection: (sectionId: string) => Promise<void>;
+  restoreSection: (sectionId: string) => Promise<void>;
+  permanentDeleteSection: (sectionId: string) => Promise<void>;
+
+  moveToTrashPage: (pageId: string) => Promise<void>;
+  restorePage: (pageId: string) => Promise<void>;
+  permanentDeletePage: (pageId: string) => Promise<void>;
+  getTrashItems: () => Promise<{ sections: Section[]; pages: Page[] }>;
 
   removeSection: (sectionId: string) => Promise<void>;
   removePage: (pageId: string) => Promise<void>;
@@ -255,6 +272,87 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     } else {
       set({ pages: [], activePage: null });
     }
+  },
+
+  renameSection: async (sectionId, newTitle) => {
+    await dbUpdateSection(sectionId, { title: newTitle });
+    set((state) => ({
+      sections: state.sections.map((s) => (s.id === sectionId ? { ...s, title: newTitle } : s)),
+      activeSection: state.activeSection?.id === sectionId ? { ...state.activeSection, title: newTitle } : state.activeSection,
+    }));
+  },
+
+  setSectionColor: async (sectionId, color) => {
+    await dbUpdateSection(sectionId, { color });
+    set((state) => ({
+      sections: state.sections.map((s) => (s.id === sectionId ? { ...s, color } : s)),
+      activeSection: state.activeSection?.id === sectionId ? { ...state.activeSection, color } : state.activeSection,
+    }));
+  },
+
+  moveToTrashSection: async (sectionId) => {
+    await dbMoveToTrashSection(sectionId);
+    const { sections, activeSection } = get();
+    const remaining = sections.filter((s) => s.id !== sectionId);
+
+    let nextActive = activeSection;
+    if (activeSection?.id === sectionId) {
+      nextActive = remaining[0] || null;
+    }
+
+    set({ sections: remaining, activeSection: nextActive });
+
+    if (nextActive) {
+      const pages = await loadPages(nextActive.id);
+      const activePage = pages[0] || null;
+      set({ pages, activePage });
+      if (activePage) {
+        await useCanvasStore.getState().loadPage(activePage.id, activePage.camera, activePage.background);
+      }
+    } else {
+      set({ pages: [], activePage: null });
+    }
+  },
+
+  restoreSection: async (sectionId) => {
+    await dbRestoreSection(sectionId);
+    await get().refreshFromStorage();
+  },
+
+  permanentDeleteSection: async (sectionId) => {
+    await dbDeleteSection(sectionId);
+    await get().refreshFromStorage();
+  },
+
+  moveToTrashPage: async (pageId) => {
+    await dbMoveToTrashPage(pageId);
+    const { pages, activePage } = get();
+    const remaining = pages.filter((p) => p.id !== pageId);
+
+    let nextActive = activePage;
+    if (activePage?.id === pageId) {
+      nextActive = remaining[0] || null;
+    }
+
+    set({ pages: remaining, activePage: nextActive });
+
+    if (nextActive) {
+      await useCanvasStore.getState().loadPage(nextActive.id, nextActive.camera, nextActive.background);
+    }
+  },
+
+  restorePage: async (pageId) => {
+    await dbRestorePage(pageId);
+    await get().refreshFromStorage();
+  },
+
+  permanentDeletePage: async (pageId) => {
+    await dbDeletePage(pageId);
+    await get().refreshFromStorage();
+  },
+
+  getTrashItems: async () => {
+    return dbLoadTrash();
   },
 
   removePage: async (pageId) => {

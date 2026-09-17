@@ -11,6 +11,9 @@ import { SearchModal } from './components/modals/SearchModal';
 import { ExportModal } from './components/modals/ExportModal';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { CloudSettingsModal } from './components/modals/CloudSettingsModal';
+import { CreateSectionModal } from './components/modals/CreateSectionModal';
+import { ConfirmDeleteModal } from './components/modals/ConfirmDeleteModal';
+import { TrashModal } from './components/modals/TrashModal';
 import './styles/app.css';
 
 export const App: React.FC = () => {
@@ -69,6 +72,9 @@ export const App: React.FC = () => {
       <ExportModal />
       <SettingsModal />
       <CloudSettingsModal />
+      <CreateSectionModal />
+      <ConfirmDeleteModal />
+      <TrashModal />
 
       {/* Кнопка выхода из Zen-режима (всегда видна в полноэкранном режиме) */}
       {isZenMode && (
