@@ -8,7 +8,6 @@ import { drawShapeToCanvas, snapShapeEndPoint, computeShapeBounds } from '../../
 import { simplifyDouglasPeucker } from '../../canvas/stroke/simplify';
 import { Point, Stroke, ShapeObject, ViewportSize } from '../../types/canvas';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
-import { aabbIntersects } from '../../canvas/engine/SpatialIndex';
 
 export const InfiniteCanvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -133,27 +132,23 @@ export const InfiniteCanvas: React.FC = () => {
 
     Viewport.applyTransform(ctx, camera, viewportSize, dpr);
 
-    const visibleRange = Viewport.getVisibleWorldBounds(camera, viewportSize, 0.2);
-
     // 1. Маркеры (рисуются первыми в режиме multiply)
     for (const stroke of strokes) {
-      if (stroke.tool === 'highlighter' && aabbIntersects(stroke.bounds, visibleRange)) {
+      if (stroke.tool === 'highlighter') {
         drawStrokeToCanvas(ctx, stroke);
       }
     }
 
-    // 2. Обычные перьевые штрихи
+    // 2. Обычные перьевые штрихи (все остальные)
     for (const stroke of strokes) {
-      if (stroke.tool === 'pen' && aabbIntersects(stroke.bounds, visibleRange)) {
+      if (stroke.tool !== 'highlighter') {
         drawStrokeToCanvas(ctx, stroke);
       }
     }
 
     // 3. Фигуры
     for (const shape of shapes) {
-      if (aabbIntersects(shape.bounds, visibleRange)) {
-        drawShapeToCanvas(ctx, shape);
-      }
+      drawShapeToCanvas(ctx, shape);
     }
   }, [camera, viewportSize, dpr, strokes, shapes]);
 
@@ -346,7 +341,7 @@ export const InfiniteCanvas: React.FC = () => {
         if (ctx) {
           drawStrokeToCanvas(ctx, {
             id: 'temp',
-            pageId: currentPageId || '',
+            pageId: currentPageId || 'page-17-09',
             tool: activeTool,
             points: [pt],
             color: activeTool === 'pen' ? penColor : highlighterColor,
@@ -479,7 +474,7 @@ export const InfiniteCanvas: React.FC = () => {
 
           const tempStroke: Stroke = {
             id: 'temp',
-            pageId: currentPageId || '',
+            pageId: currentPageId || 'page-17-09',
             tool: activeTool,
             points: strokePointsRef.current,
             color: activeTool === 'pen' ? penColor : highlighterColor,
@@ -589,20 +584,32 @@ export const InfiniteCanvas: React.FC = () => {
     // Завершение штриха пера / маркера
     if (activeTool === 'pen' || activeTool === 'highlighter') {
       const rawPoints = strokePointsRef.current;
-      if (rawPoints.length > 0 && currentPageId) {
-        const simplifiedPoints = simplifyDouglasPeucker(rawPoints, 0.8);
+      if (rawPoints.length > 0) {
+        const pageId = currentPageId || useCanvasStore.getState().currentPageId || 'page-17-09';
+        const pointsToSave = rawPoints.length > 300 ? simplifyDouglasPeucker(rawPoints, 0.5) : [...rawPoints];
+
         const newStroke: Stroke = {
           id: `stroke-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          pageId: currentPageId,
+          pageId,
           tool: activeTool,
-          points: simplifiedPoints,
+          points: pointsToSave,
           color: activeTool === 'pen' ? penColor : highlighterColor,
           baseWidth: activeTool === 'pen' ? penWidth : highlighterWidth,
           opacity: activeTool === 'pen' ? 1.0 : 0.35,
           blendMode: activeTool === 'pen' ? 'source-over' : 'multiply',
-          bounds: Viewport.computeBounds(simplifiedPoints),
+          bounds: Viewport.computeBounds(pointsToSave),
           createdAt: Date.now(),
         };
+
+        // Непосредственно рисуем на постоянный холст
+        const contentCanvas = contentCanvasRef.current;
+        if (contentCanvas) {
+          const cCtx = contentCanvas.getContext('2d');
+          if (cCtx) {
+            Viewport.applyTransform(cCtx, camera, viewportSize, dpr);
+            drawStrokeToCanvas(cCtx, newStroke);
+          }
+        }
 
         addStroke(newStroke);
       }
@@ -620,7 +627,8 @@ export const InfiniteCanvas: React.FC = () => {
     }
 
     // Завершение фигуры
-    if (activeTool === 'shape' && shapeAnchorRef.current && currentPageId) {
+    if (activeTool === 'shape' && shapeAnchorRef.current) {
+      const pageId = currentPageId || useCanvasStore.getState().currentPageId || 'page-17-09';
       const rect = containerRef.current?.getBoundingClientRect();
       const screenPos = { x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0) };
       const worldPos = Viewport.screenToWorld(screenPos, camera, viewportSize);
@@ -631,13 +639,22 @@ export const InfiniteCanvas: React.FC = () => {
 
       const newShape: ShapeObject = {
         id: `shape-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        pageId: currentPageId,
+        pageId,
         type: shapeType,
         anchor: shapeAnchorRef.current,
         end: endPt,
         style: { color: shapeColor, width: shapeWidth },
         bounds: computeShapeBounds(shapeAnchorRef.current, endPt, shapeWidth),
       };
+
+      const contentCanvas = contentCanvasRef.current;
+      if (contentCanvas) {
+        const cCtx = contentCanvas.getContext('2d');
+        if (cCtx) {
+          Viewport.applyTransform(cCtx, camera, viewportSize, dpr);
+          drawShapeToCanvas(cCtx, newShape);
+        }
+      }
 
       addShape(newShape);
       shapeAnchorRef.current = null;
@@ -703,7 +720,7 @@ export const InfiniteCanvas: React.FC = () => {
 
     addTextBlock({
       id: `tb-${Date.now()}`,
-      pageId: currentPageId,
+      pageId: currentPageId || 'page-17-09',
       x: Math.round(worldPos.x),
       y: Math.round(worldPos.y),
       width: 420,
@@ -720,6 +737,7 @@ export const InfiniteCanvas: React.FC = () => {
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       onDoubleClick={handleDoubleClick}
       style={{
         position: 'relative',

@@ -16,9 +16,11 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     init();
-    // Применяем тему
+  }, [init]);
+
+  useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-  }, [init, theme]);
+  }, [theme]);
 
   if (isLoading) {
     return (

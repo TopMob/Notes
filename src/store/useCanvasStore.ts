@@ -124,7 +124,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     camera: { x: 260, y: 150, zoom: 1 },
     background: 'plain',
 
-    currentPageId: null,
+    currentPageId: 'page-17-09',
     strokes: [],
     shapes: [],
     textBlocks: [],
@@ -171,7 +171,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         selectedStrokeIds: [],
         selectedShapeIds: [],
         selectedTextBlockIds: [],
-        camera: initialCamera ?? { x: 0, y: 0, zoom: 1 },
+        camera: initialCamera ?? { x: 260, y: 150, zoom: 1 },
         background: initialBg ?? 'plain',
         saveStatus: 'saved',
       });

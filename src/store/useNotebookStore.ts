@@ -50,6 +50,9 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
   isLoading: true,
 
   init: async () => {
+    // Предотвращаем повторную инициализацию
+    if (get().notebooks.length > 0 && !get().isLoading) return;
+
     set({ isLoading: true });
     await initStorage();
 
@@ -72,6 +75,10 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       }
     }
 
+    if (activePage) {
+      await useCanvasStore.getState().loadPage(activePage.id, activePage.camera, activePage.background);
+    }
+
     set({
       notebooks,
       activeNotebook,
@@ -81,10 +88,6 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       activePage,
       isLoading: false,
     });
-
-    if (activePage) {
-      await useCanvasStore.getState().loadPage(activePage.id, activePage.camera, activePage.background);
-    }
   },
 
   selectNotebook: async (notebook) => {
