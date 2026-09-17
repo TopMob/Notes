@@ -133,10 +133,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     shapeColor: '#201f1e',
     shapeWidth: 2,
 
-    camera: { x: 260, y: 150, zoom: 1 },
-    background: 'plain',
+    camera: { x: 0, y: 0, zoom: 1 },
+    background: 'ruled',
 
-    currentPageId: 'page-17-09',
+    currentPageId: 'page-default',
     strokes: [],
     shapes: [],
     textBlocks: [],

@@ -451,7 +451,7 @@ export const InfiniteCanvas: React.FC = () => {
         if (ctx) {
           drawStrokeToCanvas(ctx, {
             id: 'temp',
-            pageId: currentPageId || 'page-17-09',
+            pageId: currentPageId || 'page-default',
             tool: activeTool,
             points: [pt],
             color: activeTool === 'pen' ? penColor : highlighterColor,
@@ -617,7 +617,7 @@ export const InfiniteCanvas: React.FC = () => {
 
           const tempStroke: Stroke = {
             id: 'temp',
-            pageId: currentPageId || 'page-17-09',
+            pageId: currentPageId || 'page-default',
             tool: activeTool,
             points: strokePointsRef.current,
             color: activeTool === 'pen' ? penColor : highlighterColor,
@@ -728,7 +728,7 @@ export const InfiniteCanvas: React.FC = () => {
     if (activeTool === 'pen' || activeTool === 'highlighter') {
       const rawPoints = strokePointsRef.current;
       if (rawPoints.length > 0) {
-        const pageId = currentPageId || useCanvasStore.getState().currentPageId || 'page-17-09';
+        const pageId = currentPageId || useCanvasStore.getState().currentPageId || 'page-default';
         const pointsToSave = rawPoints.length > 300 ? simplifyDouglasPeucker(rawPoints, 0.5) : [...rawPoints];
 
         const newStroke: Stroke = {
@@ -771,7 +771,7 @@ export const InfiniteCanvas: React.FC = () => {
 
     // Завершение фигуры
     if (activeTool === 'shape' && shapeAnchorRef.current) {
-      const pageId = currentPageId || useCanvasStore.getState().currentPageId || 'page-17-09';
+      const pageId = currentPageId || useCanvasStore.getState().currentPageId || 'page-default';
       const rect = containerRef.current?.getBoundingClientRect();
       const screenPos = { x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0) };
       const worldPos = Viewport.screenToWorld(screenPos, camera, viewportSize);
@@ -906,7 +906,7 @@ export const InfiniteCanvas: React.FC = () => {
 
     addTextBlock({
       id: `tb-${Date.now()}`,
-      pageId: currentPageId || 'page-17-09',
+      pageId: currentPageId || 'page-default',
       x: Math.round(worldPos.x),
       y: Math.round(worldPos.y),
       width: 420,

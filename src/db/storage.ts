@@ -6,19 +6,27 @@ import {
   INITIAL_NOTEBOOK,
   INITIAL_SECTIONS,
   INITIAL_PAGES,
-  generateInitialStrokes,
-  INITIAL_TEXT_BLOCK,
 } from './initialData';
 
 export async function initStorage(): Promise<void> {
   const db = await getDB();
   const existingNotebooks = await db.getAll('notebooks');
+  const hasOldTestData = existingNotebooks.some((nb) => nb.id === 'nb-college');
 
-  if (existingNotebooks.length === 0) {
+  if (existingNotebooks.length === 0 || hasOldTestData) {
     const tx = db.transaction(
-      ['notebooks', 'sections', 'pages', 'strokes', 'textBlocks'],
+      ['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'],
       'readwrite'
     );
+
+    if (hasOldTestData) {
+      await tx.objectStore('notebooks').clear();
+      await tx.objectStore('sections').clear();
+      await tx.objectStore('pages').clear();
+      await tx.objectStore('strokes').clear();
+      await tx.objectStore('shapes').clear();
+      await tx.objectStore('textBlocks').clear();
+    }
 
     await tx.objectStore('notebooks').put(INITIAL_NOTEBOOK);
 
@@ -29,15 +37,6 @@ export async function initStorage(): Promise<void> {
     for (const page of INITIAL_PAGES) {
       await tx.objectStore('pages').put(page);
     }
-
-    // Добавляем штрихи для активной страницы
-    const initialStrokes = generateInitialStrokes('page-17-09');
-    for (const stroke of initialStrokes) {
-      await tx.objectStore('strokes').put(stroke);
-    }
-
-    // Добавляем начальный текстовый блок
-    await tx.objectStore('textBlocks').put(INITIAL_TEXT_BLOCK);
 
     await tx.done;
   }

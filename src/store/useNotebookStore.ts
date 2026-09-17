@@ -70,8 +70,8 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
       if (activeSection) {
         pages = await loadPages(activeSection.id);
-        // По умолчанию активируем страницу "17.09.2026" (вторую в демо), как в скриншоте
-        activePage = pages.find((p) => p.title === '17.09.2026') || pages[0] || null;
+        // По умолчанию активируем первую страницу
+        activePage = pages[0] || null;
       }
     }
 
