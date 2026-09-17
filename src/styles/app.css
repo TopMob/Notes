@@ -30,6 +30,44 @@
   height: 100vh;
 }
 
+.zen-mode-exit-btn {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 16px;
+  background-color: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-full);
+  box-shadow: var(--shadow-lg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: all var(--transition-fast);
+  opacity: 0.85;
+  animation: fadeInDown 0.3s ease;
+}
+
+.zen-mode-exit-btn:hover {
+  opacity: 1;
+  transform: translateY(-1px);
+  background-color: var(--brand-onenote);
+  color: #ffffff;
+  border-color: var(--brand-onenote);
+  box-shadow: 0 8px 24px rgba(119, 25, 170, 0.35);
+}
+
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 0.85; transform: translateY(0); }
+}
+
 .app-loading-screen {
   width: 100vw;
   height: 100vh;
@@ -677,7 +715,12 @@
 
 .infinite-canvas-viewport.tool-stroke-eraser,
 .infinite-canvas-viewport.tool-point-eraser {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='rgba(255,255,255,0.35)' stroke='%23333333' stroke-width='1.5' stroke-dasharray='3 2'/%3E%3Ccircle cx='16' cy='16' r='1.5' fill='%23222222'/%3E%3C/svg%3E") 16 16, crosshair;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Ccircle cx='18' cy='18' r='16' fill='rgba(255,255,255,0.35)' stroke='%23333333' stroke-width='1.5' stroke-dasharray='3 2'/%3E%3Ccircle cx='18' cy='18' r='1.5' fill='%23222222'/%3E%3C/svg%3E") 18 18, crosshair;
+}
+
+[data-theme='dark'] .infinite-canvas-viewport.tool-stroke-eraser,
+[data-theme='dark'] .infinite-canvas-viewport.tool-point-eraser {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Ccircle cx='18' cy='18' r='16' fill='rgba(0,0,0,0.35)' stroke='%23e0e0e0' stroke-width='1.5' stroke-dasharray='3 2'/%3E%3Ccircle cx='18' cy='18' r='1.5' fill='%23ffffff'/%3E%3C/svg%3E") 18 18, crosshair;
 }
 
 .infinite-canvas-viewport.tool-lasso {
@@ -854,12 +897,95 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 3px 0;
+  margin: 4px 0;
 }
 
 .todo-item input[type='checkbox'] {
   cursor: pointer;
   accent-color: var(--brand-onenote);
+  width: 16px;
+  height: 16px;
+}
+
+/* OneNote Таблицы */
+.onenote-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 0.95em;
+  background-color: var(--bg-card);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+.onenote-table th {
+  background-color: var(--bg-hover);
+  font-weight: 600;
+  color: var(--ink);
+  padding: 8px 12px;
+  border: 1px solid var(--hairline);
+  text-align: left;
+}
+
+.onenote-table td {
+  padding: 8px 12px;
+  border: 1px solid var(--hairline);
+  color: var(--ink);
+  min-width: 60px;
+}
+
+.onenote-table tr:hover td {
+  background-color: rgba(119, 25, 170, 0.03);
+}
+
+/* OneNote Callout / Выноска */
+.onenote-callout {
+  margin: 10px 0;
+  padding: 10px 14px;
+  background-color: rgba(119, 25, 170, 0.06);
+  border-left: 4px solid var(--brand-onenote);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  font-size: 0.95em;
+}
+
+.onenote-callout.callout-warning {
+  background-color: rgba(216, 59, 1, 0.07);
+  border-left-color: #d83b01;
+}
+
+.onenote-callout.callout-success {
+  background-color: rgba(16, 124, 65, 0.07);
+  border-left-color: #107c41;
+}
+
+.onenote-callout-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Блок кода */
+.onenote-code-block {
+  margin: 10px 0;
+  padding: 10px 14px;
+  background-color: var(--bg-sidebar);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono, 'Cascadia Code', 'Consolas', monospace);
+  font-size: 0.9em;
+  color: var(--ink);
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+/* Разделитель */
+.onenote-divider {
+  border: none;
+  border-top: 1.5px dashed var(--hairline);
+  margin: 14px 0;
 }
 
 /* KaTeX формулы в тексте */
@@ -870,6 +996,12 @@
   border-radius: var(--r-sm);
   display: inline-block;
   user-select: all;
+}
+
+.katex-display-block {
+  display: block;
+  text-align: center;
+  margin: 10px 0;
 }
 
 /* =========================================
@@ -997,7 +1129,36 @@
 .dropdown-item.active {
   background-color: var(--brand-onenote-light);
   color: var(--brand-onenote);
-  font-weight: 500;
+  font-weight: 600;
+}
+
+.symbol-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  padding: 4px;
+  min-width: 220px;
+}
+
+.symbol-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-family: var(--font-serif, 'Cambria', 'Times New Roman', serif);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.symbol-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--brand-onenote);
+  transform: scale(1.1);
 }
 
 .dropdown-item.danger {

@@ -9,6 +9,7 @@ import { simplifyDouglasPeucker } from '../../canvas/stroke/simplify';
 import { erasePointsFromStroke } from '../../canvas/stroke/eraser';
 import { Point, Stroke, ShapeObject, ViewportSize } from '../../types/canvas';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
+import { useUiStore } from '../../store/useUiStore';
 
 export const InfiniteCanvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -45,6 +46,8 @@ export const InfiniteCanvas: React.FC = () => {
     addTextBlock,
   } = useCanvasStore();
 
+  const { isSidebarOpen, isZenMode } = useUiStore();
+
   const [viewportSize, setViewportSize] = useState<ViewportSize>({
     w: window.innerWidth,
     h: window.innerHeight,
@@ -62,20 +65,52 @@ export const InfiniteCanvas: React.FC = () => {
   const eraserInitialStrokesRef = useRef<Stroke[] | null>(null);
   const cursorWorldPosRef = useRef<{ x: number; y: number } | null>(null);
 
-  // Resize listener
+  // Динамический Resize listener: реагирует на окно и ResizeObserver контейнера
   useEffect(() => {
-    const handleResize = () => {
+    const updateSize = () => {
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
-        setViewportSize({ w: Math.max(100, rect.width), h: Math.max(100, rect.height) });
+        if (rect.width > 0 && rect.height > 0) {
+          setViewportSize({ w: Math.round(rect.width), h: Math.round(rect.height) });
+        }
       }
       setDpr(window.devicePixelRatio || 1);
     };
 
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    updateSize();
+    window.addEventListener('resize', updateSize);
+
+    let ro: ResizeObserver | null = null;
+    if (containerRef.current && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          if (width > 0 && height > 0) {
+            setViewportSize({ w: Math.round(width), h: Math.round(height) });
+          }
+        }
+      });
+      ro.observe(containerRef.current);
+    }
+
+    return () => {
+      window.removeEventListener('resize', updateSize);
+      if (ro) ro.disconnect();
+    };
   }, []);
+
+  // Мгновенный пересчет размера при сворачивании/разворачивании сайдбара и переключении Zen-режима
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          setViewportSize({ w: Math.round(rect.width), h: Math.round(rect.height) });
+        }
+      }
+    }, 30);
+    return () => clearTimeout(timer);
+  }, [isSidebarOpen, isZenMode]);
 
   // Горячие клавиши (Space для Pan, Ctrl+Z для Undo, Del для удаления)
   useEffect(() => {
@@ -281,30 +316,6 @@ export const InfiniteCanvas: React.FC = () => {
         ctx.fillRect(cx - handleSize / 2, cy - handleSize / 2, handleSize, handleSize);
         ctx.strokeRect(cx - handleSize / 2, cy - handleSize / 2, handleSize, handleSize);
       }
-      ctx.restore();
-    }
-
-    // 2. Кружок ластика под курсором
-    if (
-      (activeTool === 'point-eraser' || activeTool === 'stroke-eraser') &&
-      cursorWorldPosRef.current
-    ) {
-      const eraserRadius = 16 / camera.zoom;
-      const cp = cursorWorldPosRef.current;
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(cp.x, cp.y, eraserRadius, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.fill();
-      ctx.strokeStyle = '#333333';
-      ctx.lineWidth = 1.5 / camera.zoom;
-      ctx.setLineDash([4 / camera.zoom, 3 / camera.zoom]);
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(cp.x, cp.y, 1.5 / camera.zoom, 0, Math.PI * 2);
-      ctx.fillStyle = '#333333';
-      ctx.fill();
       ctx.restore();
     }
   }, [

@@ -7,6 +7,11 @@ import {
   Lasso,
   GripHorizontal,
   X,
+  FileText,
+  Maximize2,
+  Minimize2,
+  Undo2,
+  Redo2,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { useUiStore } from '../../store/useUiStore';
@@ -17,8 +22,15 @@ export const FloatingPalette: React.FC = () => {
     setActiveTool,
     penColor,
     setPenColor,
+    canUndo,
+    canRedo,
+    undo,
+    redo,
+    camera,
+    currentPageId,
+    addTextBlock,
   } = useCanvasStore();
-  const { isFloatingPaletteOpen, toggleFloatingPalette } = useUiStore();
+  const { isFloatingPaletteOpen, toggleFloatingPalette, isZenMode, toggleZenMode } = useUiStore();
 
   const [position, setPosition] = useState({ x: 340, y: 140 });
   const [isDragging, setIsDragging] = useState(false);
@@ -115,6 +127,54 @@ export const FloatingPalette: React.FC = () => {
           title="Лассо"
         >
           <Lasso size={15} />
+        </button>
+
+        <div style={{ width: 1, height: 18, backgroundColor: 'var(--hairline)', margin: '0 2px' }} />
+
+        <button
+          className="floating-tool-btn"
+          onClick={() => {
+            if (!currentPageId) return;
+            const newId = `tb-${Date.now()}`;
+            addTextBlock({
+              id: newId,
+              pageId: currentPageId,
+              x: Math.round(camera.x - 140),
+              y: Math.round(camera.y - 40),
+              width: 380,
+              contentHTML: '<p>Введите текст...</p>',
+              zIndex: 10,
+            });
+            useCanvasStore.getState().setSelection([], [], [newId]);
+          }}
+          title="Вставить текстовый блок"
+        >
+          <FileText size={15} />
+        </button>
+
+        <button
+          className="floating-tool-btn"
+          onClick={undo}
+          disabled={!canUndo}
+          title="Отменить (Ctrl+Z)"
+        >
+          <Undo2 size={15} />
+        </button>
+        <button
+          className="floating-tool-btn"
+          onClick={redo}
+          disabled={!canRedo}
+          title="Повторить (Ctrl+Y)"
+        >
+          <Redo2 size={15} />
+        </button>
+
+        <button
+          className={`floating-tool-btn ${isZenMode ? 'active' : ''}`}
+          onClick={toggleZenMode}
+          title={isZenMode ? 'Выйти из Zen-режима (Esc)' : 'Zen-режим (полный экран)'}
+        >
+          {isZenMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
         </button>
       </div>
 
