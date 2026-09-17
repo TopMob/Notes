@@ -40,6 +40,7 @@ interface NotebookState {
   removePage: (pageId: string) => Promise<void>;
 
   renamePage: (pageId: string, newTitle: string) => Promise<void>;
+  refreshFromStorage: () => Promise<void>;
 }
 
 export const useNotebookStore = create<NotebookState>((set, get) => ({
@@ -279,5 +280,40 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       pages: state.pages.map((p) => (p.id === pageId ? { ...p, title: newTitle } : p)),
       activePage: state.activePage?.id === pageId ? { ...state.activePage, title: newTitle } : state.activePage,
     }));
+  },
+
+  refreshFromStorage: async () => {
+    const notebooks = await loadNotebooks();
+    const activeNb = get().activeNotebook || notebooks[0] || null;
+    let sections: Section[] = [];
+    let activeSec = get().activeSection;
+    let pages: Page[] = [];
+    let activePg = get().activePage;
+
+    if (activeNb) {
+      sections = await loadSections(activeNb.id);
+      if (!activeSec || !sections.some((s) => s.id === activeSec?.id)) {
+        activeSec = sections[0] || null;
+      }
+      if (activeSec) {
+        pages = await loadPages(activeSec.id);
+        if (!activePg || !pages.some((p) => p.id === activePg?.id)) {
+          activePg = pages[0] || null;
+        }
+      }
+    }
+
+    if (activePg) {
+      await useCanvasStore.getState().loadPage(activePg.id, activePg.camera, activePg.background);
+    }
+
+    set({
+      notebooks,
+      activeNotebook: activeNb,
+      sections,
+      activeSection: activeSec,
+      pages,
+      activePage: activePg,
+    });
   },
 }));

@@ -10,6 +10,7 @@ import {
 } from '../../db/storage';
 import { getDB } from '../../db/idb';
 import { Section, Page } from '../../types/notebook';
+import { useNotebookStore } from '../../store/useNotebookStore';
 
 interface SyncStoreState {
   providerType: SyncProviderType;
@@ -219,6 +220,9 @@ class SyncEngine {
             await db.put('textBlocks', el.data);
           }
         }
+
+        // Мгновенно обновляем интерфейс и активную страницу без перезагрузки браузера
+        await useNotebookStore.getState().refreshFromStorage();
       }
 
       useSyncStore.getState().setStatus('synced');
