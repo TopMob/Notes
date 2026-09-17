@@ -780,6 +780,17 @@
   transition: box-shadow var(--transition-fast);
 }
 
+/* Когда выбран любой инструмент кроме курсора (перо, маркер, ластик, фигуры, лассо),
+   текстовые блоки не перехватывают курсор и рисование происходит прямо поверх них */
+.infinite-canvas-viewport:not(.tool-cursor) .text-block-container {
+  pointer-events: none !important;
+  user-select: none !important;
+}
+
+.infinite-canvas-viewport:not(.tool-cursor) .text-block-container .text-block-handle {
+  display: none !important;
+}
+
 .text-block-container:hover .text-block-handle,
 .text-block-container.selected .text-block-handle {
   opacity: 1;

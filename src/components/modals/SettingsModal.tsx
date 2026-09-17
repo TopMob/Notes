@@ -21,6 +21,8 @@ export const SettingsModal: React.FC = () => {
     setPenCursorStyle,
     rightClickAction,
     setRightClickAction,
+    eraserSize,
+    setEraserSize,
   } = useCanvasStore();
 
   if (!isSettingsOpen) return null;
@@ -191,6 +193,42 @@ export const SettingsModal: React.FC = () => {
                   </div>
                 )}
               </button>
+            </div>
+
+            {/* Настройка размера ластика (для инструмента и ПКМ) */}
+            <div style={{ marginTop: '16px', padding: '12px 14px', background: 'var(--bg-hover)', borderRadius: '8px', border: '1px solid var(--hairline)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
+                  Размер ластика (применяется для инструмента Ластик и для ПКМ):
+                </span>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--brand-onenote)' }}>
+                  {eraserSize} px
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                <input
+                  type="range"
+                  min="6"
+                  max="60"
+                  step="2"
+                  value={eraserSize}
+                  onChange={(e) => setEraserSize(Number(e.target.value))}
+                  style={{ flex: 1, cursor: 'pointer' }}
+                />
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  {[8, 16, 24, 36, 48].map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      className={`tool-btn ${eraserSize === s ? 'active' : ''}`}
+                      style={{ padding: '4px 10px', fontSize: '12px', borderRadius: '4px' }}
+                      onClick={() => setEraserSize(s)}
+                    >
+                      {s}px
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 

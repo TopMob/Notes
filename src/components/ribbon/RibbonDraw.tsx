@@ -15,8 +15,6 @@ import {
   Circle,
   ArrowUpRight,
   SplitSquareVertical,
-  Crosshair,
-  CircleDot,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
 
@@ -28,8 +26,8 @@ export const RibbonDraw: React.FC = () => {
     setPenColor,
     penWidth,
     setPenWidth,
-    penCursorStyle,
-    setPenCursorStyle,
+    eraserSize,
+    setEraserSize,
     quickColors,
     updateQuickColor,
     shapeType,
@@ -132,7 +130,7 @@ export const RibbonDraw: React.FC = () => {
           </button>
 
           {isEraserMenuOpen && (
-            <div className="dropdown-menu">
+            <div className="dropdown-menu" style={{ minWidth: '180px' }}>
               <button
                 className={`dropdown-item ${activeTool === 'point-eraser' ? 'active' : ''}`}
                 onClick={() => {
@@ -151,6 +149,28 @@ export const RibbonDraw: React.FC = () => {
               >
                 <span>Поштриховой ластик</span>
               </button>
+
+              <div style={{ padding: '6px 12px 6px', borderTop: '1px solid var(--hairline)', marginTop: '4px' }}>
+                <div style={{ fontSize: '11px', color: 'var(--ink-secondary)', marginBottom: '6px' }}>
+                  Размер (и для ПКМ): {eraserSize}px
+                </div>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  {[8, 16, 24, 36, 48].map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      className={`tool-btn icon-only ${eraserSize === s ? 'active' : ''}`}
+                      style={{ flex: 1, height: '24px', fontSize: '11px' }}
+                      onClick={() => {
+                        setEraserSize(s);
+                        setIsEraserMenuOpen(false);
+                      }}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -179,15 +199,6 @@ export const RibbonDraw: React.FC = () => {
             style={{ color: activeTool === 'highlighter' ? '#d4b106' : undefined }}
           />
           <span className="tool-btn-label">Маркер</span>
-        </button>
-
-        {/* Переключатель стиля курсора (+ или кружок) */}
-        <button
-          className={`tool-btn icon-only ${penCursorStyle === 'circle' ? 'active' : ''}`}
-          onClick={() => setPenCursorStyle(penCursorStyle === 'circle' ? 'crosshair' : 'circle')}
-          title={`Курсор пера: ${penCursorStyle === 'circle' ? 'Кружок по размеру пера' : 'Перекрестие (+)'} (клик для переключения)`}
-        >
-          {penCursorStyle === 'circle' ? <CircleDot size={16} /> : <Crosshair size={16} />}
         </button>
       </div>
 

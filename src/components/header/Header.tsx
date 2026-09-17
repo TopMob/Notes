@@ -2,8 +2,6 @@ import React, { useState } from 'react';
 import {
   Grid,
   Search,
-  Moon,
-  Sun,
   Maximize2,
   Minimize2,
   Share2,
@@ -20,8 +18,6 @@ import { AuthControls } from '../auth/AuthControls';
 export const Header: React.FC = () => {
   const { notebooks, activeNotebook, selectNotebook } = useNotebookStore();
   const {
-    theme,
-    toggleTheme,
     isZenMode,
     toggleZenMode,
     setSearchOpen,
@@ -110,15 +106,6 @@ export const Header: React.FC = () => {
           <Share2 size={14} />
           <span>Поделиться</span>
           <ChevronDown size={12} />
-        </button>
-
-        {/* Переключатель темы */}
-        <button
-          className="header-icon-btn"
-          onClick={toggleTheme}
-          title={theme === 'light' ? 'Включить тёмную тему' : 'Включить светлую тему'}
-        >
-          {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
         </button>
 
         {/* Zen-режим */}

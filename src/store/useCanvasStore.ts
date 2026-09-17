@@ -121,6 +121,8 @@ interface CanvasState {
   setPenCursorStyle: (style: PenCursorStyle) => void;
   rightClickAction: RightClickAction;
   setRightClickAction: (action: RightClickAction) => void;
+  eraserSize: number;
+  setEraserSize: (size: number) => void;
   quickColors: string[];
   setQuickColors: (colors: string[]) => void;
   updateQuickColor: (index: number, color: string) => void;
@@ -276,6 +278,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         // ignore
       }
       set({ rightClickAction });
+    },
+    eraserSize: Number(localStorage.getItem('notes_eraser_size')) || 16,
+    setEraserSize: (eraserSize) => {
+      try {
+        localStorage.setItem('notes_eraser_size', String(eraserSize));
+      } catch {
+        // ignore
+      }
+      set({ eraserSize });
     },
     quickColors: ['#201f1e', '#0078d4', '#107c41', '#d83b01', '#7719aa'],
     setQuickColors: (quickColors) => set({ quickColors }),

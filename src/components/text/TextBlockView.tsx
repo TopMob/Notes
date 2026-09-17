@@ -34,7 +34,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   isActive,
   onSelect,
 }) => {
-  const { updateTextBlock, removeTextBlock, setTextBlockHeight } = useCanvasStore();
+  const { activeTool, updateTextBlock, removeTextBlock, setTextBlockHeight } = useCanvasStore();
   const screenPos = Viewport.worldToScreen({ x: block.x, y: block.y }, camera, viewportSize);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -369,7 +369,9 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         width: `${block.width * camera.zoom}px`,
         zIndex: block.zIndex,
       }}
-      onClick={onSelect}
+      onClick={() => {
+        if (activeTool === 'cursor') onSelect();
+      }}
       onDoubleClick={(e) => e.stopPropagation()}
     >
       {/* Верхний серый Drag-Handle (фирменный хендл OneNote) */}

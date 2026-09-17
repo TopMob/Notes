@@ -25,6 +25,7 @@ export const InfiniteCanvas: React.FC = () => {
     penWidth,
     penCursorStyle,
     rightClickAction,
+    eraserSize,
     highlighterColor,
     highlighterWidth,
     shapeType,
@@ -401,7 +402,7 @@ export const InfiniteCanvas: React.FC = () => {
       (activeTool === 'point-eraser' || activeTool === 'stroke-eraser' || isRightClickEraserRef.current) &&
       cursorWorldPosRef.current
     ) {
-      const radius = 16 / camera.zoom;
+      const radius = (eraserSize || 16) / camera.zoom;
       ctx.save();
       ctx.strokeStyle = '#ef4444';
       ctx.lineWidth = 1.5 / camera.zoom;
@@ -488,8 +489,42 @@ export const InfiniteCanvas: React.FC = () => {
 
   // Поинтер события для рисования
   const handlePointerDown = (e: React.PointerEvent) => {
-    // Если клик внутри контейнера текста - отдаем управление contentEditable для выделения текста и ввода!
-    if ((e.target as HTMLElement)?.closest('.text-block-container')) {
+    // Проверка аккорда мыши: ЛКМ + ПКМ (Rocker gesture / Chord click) -> Отмена действия (Ctrl+Z)
+    const isChordLmbRmb =
+      ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0) ||
+      (e.button === 0 && (e.buttons & 2) !== 0) ||
+      (e.button === 2 && (e.buttons & 1) !== 0);
+
+    if (isChordLmbRmb) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      strokePointsRef.current = [];
+      shapeAnchorRef.current = null;
+      lassoPointsRef.current = [];
+      const activeCanvas = activeCanvasRef.current;
+      if (activeCanvas) {
+        const ctx = activeCanvas.getContext('2d');
+        if (ctx) {
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
+        }
+      }
+
+      if (isRightClickEraserRef.current && eraserInitialStrokesRef.current) {
+        useCanvasStore.setState({ strokes: eraserInitialStrokesRef.current });
+        eraserInitialStrokesRef.current = null;
+      }
+      isPointerDownRef.current = false;
+      isRightClickEraserRef.current = false;
+
+      useCanvasStore.getState().undo();
+      renderSelectionAndCursorLayer();
+      return;
+    }
+
+    // Если активен курсор и клик внутри контейнера текста - отдаем управление contentEditable
+    if (activeTool === 'cursor' && (e.target as HTMLElement)?.closest('.text-block-container')) {
       return;
     }
 
@@ -669,7 +704,7 @@ export const InfiniteCanvas: React.FC = () => {
   };
 
   const handleEraserErase = (worldPos: { x: number; y: number }) => {
-    const eraserRadius = 16 / camera.zoom;
+    const eraserRadius = (eraserSize || 16) / camera.zoom;
     const searchRange = {
       minX: worldPos.x - eraserRadius - 10,
       minY: worldPos.y - eraserRadius - 10,
