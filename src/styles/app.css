@@ -1,0 +1,1208 @@
+@import './tokens.css';
+@import './reset.css';
+
+/* Основной лейаут приложения */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background-color: var(--bg-app);
+}
+
+.app-main-layout {
+  display: flex;
+  flex: 1;
+  height: calc(100vh - 44px - 84px);
+  overflow: hidden;
+  position: relative;
+}
+
+.app-container.zen-mode .app-header,
+.app-container.zen-mode .ribbon-container,
+.app-container.zen-mode .app-sidebar,
+.app-container.zen-mode .sidebar-collapsed {
+  display: none !important;
+}
+
+.app-container.zen-mode .app-main-layout {
+  height: 100vh;
+}
+
+.app-loading-screen {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--bg-app);
+}
+
+.loading-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--ink-secondary);
+  font-size: 14px;
+}
+
+.loading-spinner .onenote-logo {
+  width: 48px;
+  height: 48px;
+  font-size: 24px;
+  animation: pulse 1.5s infinite;
+}
+
+
+/* =========================================
+   1. ШАПКА (HEADER)
+   ========================================= */
+.app-header {
+  height: 44px;
+  background-color: var(--bg-app);
+  border-bottom: 1px solid var(--hairline);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--sp-3);
+  z-index: 50;
+  user-select: none;
+}
+
+.header-left, .header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.header-center {
+  flex: 1;
+  max-width: 440px;
+  margin: 0 var(--sp-4);
+}
+
+.header-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  color: var(--ink-secondary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.header-icon-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--ink);
+}
+
+.brand-group {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.onenote-logo {
+  width: 24px;
+  height: 24px;
+  background-color: var(--brand-onenote);
+  border-radius: var(--r-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.notebook-selector-wrapper {
+  position: relative;
+}
+
+.notebook-selector-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  transition: background var(--transition-fast);
+}
+
+.notebook-selector-btn:hover {
+  background-color: var(--bg-hover);
+}
+
+.search-bar {
+  display: flex;
+  align-items: center;
+  background-color: var(--bg-card);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  padding: 5px var(--sp-3);
+  gap: var(--sp-2);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.search-bar:hover {
+  border-color: var(--brand-onenote);
+}
+
+.search-icon {
+  color: var(--ink-muted);
+}
+
+.search-placeholder {
+  flex: 1;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.search-shortcut {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background-color: var(--bg-hover);
+  color: var(--ink-secondary);
+  border: 1px solid var(--hairline);
+}
+
+/* Статус сохранения */
+.save-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: 12px;
+  color: var(--ink-secondary);
+  padding: 4px var(--sp-2);
+  border-radius: var(--r-sm);
+}
+
+.save-icon.saved {
+  color: var(--status-success);
+}
+
+.save-icon.saving {
+  color: var(--brand-onenote);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.mode-badge {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: 12px;
+  color: var(--ink-secondary);
+  padding: 4px var(--sp-2);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline);
+  background-color: var(--bg-card);
+}
+
+.btn-share {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  background-color: var(--brand-onenote);
+  color: #ffffff;
+  padding: 5px var(--sp-3);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background var(--transition-fast);
+}
+
+.btn-share:hover {
+  background-color: var(--brand-onenote-hover);
+}
+
+.user-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #e0a96d 0%, #b8621b 100%);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+/* =========================================
+   2. ЛЕНТА ИНСТРУМЕНТОВ (RIBBON)
+   ========================================= */
+.ribbon-container {
+  background-color: var(--bg-ribbon);
+  border-bottom: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  z-index: 40;
+}
+
+.ribbon-tabs-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--sp-3);
+  height: 32px;
+  border-bottom: 1px solid var(--hairline-subtle);
+}
+
+.ribbon-tabs-list {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  gap: var(--sp-1);
+}
+
+.ribbon-tab-btn {
+  height: 100%;
+  padding: 0 var(--sp-3);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-secondary);
+  border-bottom: 2px solid transparent;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.ribbon-tab-btn:hover {
+  color: var(--ink);
+}
+
+.ribbon-tab-btn.active {
+  color: var(--brand-onenote);
+  border-bottom-color: var(--brand-onenote);
+  font-weight: 600;
+}
+
+.ribbon-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: var(--ink-muted);
+  border-radius: var(--r-xs);
+}
+
+.ribbon-collapse-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--ink);
+}
+
+.ribbon-content {
+  height: 52px;
+  padding: 0 var(--sp-3);
+  display: flex;
+  align-items: center;
+  background-color: var(--bg-card);
+}
+
+.ribbon-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  width: 100%;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 24px;
+  background-color: var(--hairline);
+  margin: 0 var(--sp-1);
+}
+
+.tool-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 5px var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  color: var(--ink);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  border: 1px solid transparent;
+  height: 32px;
+}
+
+.tool-btn:hover {
+  background-color: var(--bg-hover);
+}
+
+.tool-btn.active {
+  background-color: var(--accent-surface);
+  color: var(--brand-onenote);
+  border-color: var(--brand-onenote);
+  font-weight: 600;
+}
+
+.tool-btn.highlight {
+  background-color: var(--brand-onenote-light);
+  color: var(--brand-onenote);
+  font-weight: 600;
+}
+
+.tool-btn.danger {
+  color: var(--status-danger);
+}
+
+.tool-btn.icon-only {
+  width: 32px;
+  justify-content: center;
+  padding: 0;
+}
+
+.tool-btn-label {
+  white-space: nowrap;
+}
+
+.chevron {
+  color: var(--ink-muted);
+}
+
+/* Палитра цветов в тулбаре */
+.color-swatches-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.color-swatch-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  transition: transform var(--transition-fast), border-color var(--transition-fast);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+
+.color-swatch-btn:hover {
+  transform: scale(1.15);
+}
+
+.color-swatch-btn.selected {
+  border-color: #ffffff;
+  outline: 2px solid var(--brand-onenote);
+  outline-offset: 1px;
+}
+
+.color-picker-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+  color: var(--ink-secondary);
+  cursor: pointer;
+  position: relative;
+}
+
+.color-picker-label:hover {
+  background-color: var(--bg-hover);
+}
+
+.hidden-color-input, .hidden-file-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* =========================================
+   3. БОКОВАЯ ПАНЕЛЬ (SIDEBAR)
+   ========================================= */
+.app-sidebar {
+  width: 320px;
+  background-color: var(--bg-sidebar);
+  border-right: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  z-index: 30;
+}
+
+.sidebar-collapsed {
+  width: 44px;
+  background-color: var(--bg-sidebar);
+  border-right: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--sp-2) 0;
+  gap: var(--sp-2);
+}
+
+.sidebar-toggle-btn, .sidebar-icon-shortcut {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  color: var(--ink-secondary);
+}
+
+.sidebar-toggle-btn:hover, .sidebar-icon-shortcut:hover {
+  background-color: var(--bg-hover);
+  color: var(--ink);
+}
+
+.vertical-notebook-name {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  margin-top: var(--sp-4);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  letter-spacing: 0.05em;
+}
+
+.sidebar-header {
+  height: 40px;
+  border-bottom: 1px solid var(--hairline);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--sp-3);
+}
+
+.notebook-badge-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.onenote-purple {
+  color: var(--brand-onenote);
+}
+
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.sidebar-action-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  color: var(--ink-secondary);
+}
+
+.sidebar-action-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--ink);
+}
+
+/* Две колонки сайдбара */
+.sidebar-columns-container {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.sidebar-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sections-column {
+  border-right: 1px solid var(--hairline);
+}
+
+.add-item-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-onenote);
+  border-bottom: 1px solid var(--hairline-subtle);
+  transition: background var(--transition-fast);
+}
+
+.add-item-btn:hover {
+  background-color: var(--bg-hover);
+}
+
+.items-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Элемент раздела */
+.section-item {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 var(--sp-2) 0 0;
+  cursor: pointer;
+  position: relative;
+  transition: background var(--transition-fast);
+}
+
+.section-item:hover {
+  background-color: var(--bg-sidebar-hover);
+}
+
+.section-item.active {
+  background-color: var(--bg-sidebar-active);
+  font-weight: 600;
+}
+
+.section-color-strip {
+  width: 4px;
+  height: 100%;
+  margin-right: var(--sp-2);
+  flex-shrink: 0;
+}
+
+.item-title {
+  flex: 1;
+  font-size: 13px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rename-input {
+  flex: 1;
+  font-size: 13px;
+  border: 1px solid var(--brand-onenote);
+  border-radius: var(--r-xs);
+  padding: 2px 4px;
+  background-color: var(--bg-card);
+  color: var(--ink);
+}
+
+.item-actions {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.item-more-btn {
+  opacity: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-xs);
+  color: var(--ink-muted);
+}
+
+.section-item:hover .item-more-btn,
+.page-item:hover .item-more-btn {
+  opacity: 1;
+}
+
+.item-more-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--ink);
+}
+
+/* Элемент страницы */
+.page-item {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  cursor: pointer;
+  position: relative;
+  transition: background var(--transition-fast);
+}
+
+.page-item:hover {
+  background-color: var(--bg-sidebar-hover);
+}
+
+.page-item.active {
+  background-color: var(--bg-sidebar-active);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--brand-onenote);
+}
+
+/* =========================================
+   4. БЕСКОНЕЧНЫЙ ХОЛСТ (CANVAS)
+   ========================================= */
+.infinite-canvas-viewport {
+  position: relative;
+  flex: 1;
+  height: 100%;
+  background-color: var(--bg-canvas);
+  cursor: default;
+}
+
+.infinite-canvas-viewport.tool-pen {
+  cursor: crosshair;
+}
+
+.infinite-canvas-viewport.tool-highlighter {
+  cursor: crosshair;
+}
+
+.infinite-canvas-viewport.tool-stroke-eraser,
+.infinite-canvas-viewport.tool-point-eraser {
+  cursor: cell;
+}
+
+.infinite-canvas-viewport.tool-lasso {
+  cursor: crosshair;
+}
+
+.infinite-canvas-viewport.tool-pan {
+  cursor: grab;
+}
+
+.canvas-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.canvas-background {
+  z-index: 1;
+}
+
+.canvas-content {
+  z-index: 2;
+}
+
+.canvas-active {
+  z-index: 3;
+}
+
+.canvas-selection {
+  z-index: 4;
+}
+
+.dom-text-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* =========================================
+   5. ТЕКСТОВЫЙ БЛОК (TEXT BLOCK)
+   ========================================= */
+.text-block-container {
+  pointer-events: auto;
+  background-color: transparent;
+  border-radius: var(--r-xs);
+  transition: box-shadow var(--transition-fast);
+}
+
+.text-block-container:hover .text-block-handle,
+.text-block-container.selected .text-block-handle {
+  opacity: 1;
+}
+
+.text-block-container:hover,
+.text-block-container.selected {
+  outline: 1px solid var(--hairline);
+  box-shadow: var(--shadow-sm);
+}
+
+.text-block-handle {
+  height: 16px;
+  background-color: #edebe9;
+  border-top-left-radius: var(--r-xs);
+  border-top-right-radius: var(--r-xs);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+  cursor: grab;
+  opacity: 0.15;
+  transition: opacity var(--transition-fast);
+}
+
+[data-theme='dark'] .text-block-handle {
+  background-color: #323130;
+}
+
+.text-block-handle:active {
+  cursor: grabbing;
+}
+
+.drag-icon {
+  color: var(--ink-muted);
+}
+
+.btn-delete-block {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-muted);
+}
+
+.btn-delete-block:hover {
+  color: var(--status-danger);
+}
+
+.text-block-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -8px;
+  width: 16px;
+  height: 100%;
+  cursor: ew-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--ink-muted);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.text-block-container:hover .text-block-resize-handle,
+.text-block-container.selected .text-block-resize-handle {
+  opacity: 1;
+}
+
+.text-block-content {
+  padding: 8px 12px;
+  outline: none;
+  font-family: var(--font-sans);
+  color: var(--ink);
+}
+
+.text-block-content h1 {
+  font-size: 1.6em;
+  font-weight: 700;
+  margin-bottom: 0.3em;
+}
+
+.text-block-content h2 {
+  font-size: 1.35em;
+  font-weight: 600;
+  margin-bottom: 0.3em;
+}
+
+.text-block-content h3 {
+  font-size: 1.15em;
+  font-weight: 600;
+  margin-bottom: 0.3em;
+}
+
+.text-block-content p {
+  margin-bottom: 0.4em;
+}
+
+.text-block-content ul,
+.text-block-content ol {
+  padding-left: 1.4em;
+  margin-bottom: 0.4em;
+}
+
+.text-block-content ul {
+  list-style: disc;
+}
+
+.text-block-content ol {
+  list-style: decimal;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 3px 0;
+}
+
+.todo-item input[type='checkbox'] {
+  cursor: pointer;
+  accent-color: var(--brand-onenote);
+}
+
+/* KaTeX формулы в тексте */
+.katex-rendered-block {
+  margin: 6px 0;
+  padding: 4px 8px;
+  background-color: rgba(119, 25, 170, 0.04);
+  border-radius: var(--r-sm);
+  display: inline-block;
+  user-select: all;
+}
+
+/* =========================================
+   6. ПЛАВАЮЩАЯ ПАЛИТРА (FLOATING PALETTE)
+   ========================================= */
+.floating-palette {
+  position: absolute;
+  z-index: 60;
+  background-color: var(--bg-card);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  user-select: none;
+}
+
+.floating-drag-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: grab;
+  color: var(--ink-muted);
+  padding: 0 4px;
+}
+
+.floating-drag-bar:active {
+  cursor: grabbing;
+}
+
+.floating-tools-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.floating-tool-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  color: var(--ink);
+}
+
+.floating-tool-btn:hover {
+  background-color: var(--bg-hover);
+}
+
+.floating-tool-btn.active {
+  background-color: var(--brand-onenote-light);
+  color: var(--brand-onenote);
+}
+
+.floating-colors-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px;
+}
+
+.floating-color-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.floating-color-dot.selected {
+  outline: 2px solid var(--brand-onenote);
+  outline-offset: 1px;
+}
+
+/* =========================================
+   7. ВЫПАДАЮЩИЕ МЕНЮ И МОДАЛЬНЫЕ ОКНА
+   ========================================= */
+.dropdown-wrapper {
+  position: relative;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  background-color: var(--bg-dropdown);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-dropdown);
+  padding: var(--sp-1);
+  min-width: 180px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dropdown-header {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  padding: 4px var(--sp-2);
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px var(--sp-3);
+  font-size: 13px;
+  color: var(--ink);
+  border-radius: var(--r-sm);
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+
+.dropdown-item:hover {
+  background-color: var(--bg-hover);
+}
+
+.dropdown-item.active {
+  background-color: var(--brand-onenote-light);
+  color: var(--brand-onenote);
+  font-weight: 500;
+}
+
+.dropdown-item.danger {
+  color: var(--status-danger);
+}
+
+.color-picker-row {
+  display: flex;
+  gap: 6px;
+  padding: 6px var(--sp-2);
+}
+
+.mini-color-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform var(--transition-fast);
+}
+
+.mini-color-dot:hover {
+  transform: scale(1.2);
+}
+
+/* Модальные окна */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-content {
+  background-color: var(--bg-card);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  width: 90%;
+  max-width: 540px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.modal-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.modal-close-btn {
+  color: var(--ink-muted);
+  padding: 4px;
+  border-radius: var(--r-xs);
+}
+
+.modal-close-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--ink);
+}
+
+.modal-body {
+  padding: var(--sp-4);
+}
+
+.export-options-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.export-card {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background-color: var(--bg-card);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.export-card:hover {
+  border-color: var(--brand-onenote);
+  background-color: var(--bg-hover);
+}
+
+.export-card-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--r-sm);
+  background-color: var(--brand-onenote-light);
+  color: var(--brand-onenote);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.export-card-info {
+  flex: 1;
+}
+
+.export-card-info h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+
+.export-card-info p {
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+
+.card-action-icon {
+  color: var(--ink-muted);
+}
+
+/* Модалка поиска */
+.search-modal {
+  max-width: 600px;
+}
+
+.search-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.search-modal-icon {
+  color: var(--brand-onenote);
+}
+
+.search-modal-input {
+  flex: 1;
+  border: none;
+  font-size: 15px;
+  background: transparent;
+  color: var(--ink);
+  outline: none;
+}
+
+.search-results-list {
+  max-height: 380px;
+  overflow-y: auto;
+  padding: var(--sp-2);
+}
+
+.search-result-item {
+  padding: var(--sp-3);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: background var(--transition-fast);
+  position: relative;
+}
+
+.search-result-item:hover {
+  background-color: var(--bg-hover);
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brand-onenote);
+}
+
+.result-divider {
+  color: var(--ink-subtle);
+}
+
+.result-body {
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.4;
+}
+
+.result-arrow {
+  position: absolute;
+  right: var(--sp-3);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ink-muted);
+}
+
+.search-loading, .search-empty {
+  padding: var(--sp-6);
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
