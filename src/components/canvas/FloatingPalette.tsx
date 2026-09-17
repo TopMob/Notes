@@ -101,9 +101,11 @@ export const FloatingPalette: React.FC = () => {
           <Highlighter size={15} style={{ color: '#d4b106' }} />
         </button>
         <button
-          className={`floating-tool-btn ${activeTool === 'stroke-eraser' ? 'active' : ''}`}
-          onClick={() => setActiveTool('stroke-eraser')}
-          title="Ластик"
+          className={`floating-tool-btn ${
+            activeTool === 'point-eraser' || activeTool === 'stroke-eraser' ? 'active' : ''
+          }`}
+          onClick={() => setActiveTool('point-eraser')}
+          title="Точечный ластик"
         >
           <Eraser size={15} />
         </button>

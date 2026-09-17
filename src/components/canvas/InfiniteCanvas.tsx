@@ -6,6 +6,7 @@ import { TextOverlay } from '../text/TextOverlay';
 import { drawStrokeToCanvas } from '../../canvas/stroke/freehand';
 import { drawShapeToCanvas, snapShapeEndPoint, computeShapeBounds } from '../../canvas/stroke/shapes';
 import { simplifyDouglasPeucker } from '../../canvas/stroke/simplify';
+import { erasePointsFromStroke } from '../../canvas/stroke/eraser';
 import { Point, Stroke, ShapeObject, ViewportSize } from '../../types/canvas';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
 
@@ -39,6 +40,7 @@ export const InfiniteCanvas: React.FC = () => {
     selectedShapeIds,
     selectedTextBlockIds,
     setSelection,
+    clearSelection,
     moveSelectedItems,
     addTextBlock,
   } = useCanvasStore();
@@ -57,6 +59,8 @@ export const InfiniteCanvas: React.FC = () => {
   const panStartRef = useRef<{ clientX: number; clientY: number; camX: number; camY: number } | null>(null);
   const isSpacePressedRef = useRef(false);
   const moveDragStartRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const eraserInitialStrokesRef = useRef<Stroke[] | null>(null);
+  const cursorWorldPosRef = useRef<{ x: number; y: number } | null>(null);
 
   // Resize listener
   useEffect(() => {
@@ -85,18 +89,23 @@ export const InfiniteCanvas: React.FC = () => {
         if (containerRef.current) containerRef.current.style.cursor = 'grab';
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      const isZ = e.code === 'KeyZ' || e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'я';
+      const isY = e.code === 'KeyY' || e.key.toLowerCase() === 'y' || e.key.toLowerCase() === 'н';
+
+      if ((e.ctrlKey || e.metaKey) && isZ) {
         e.preventDefault();
         if (e.shiftKey) {
           globalCommandStack.redo();
         } else {
           globalCommandStack.undo();
         }
-      }
-
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+      } else if ((e.ctrlKey || e.metaKey) && isY) {
         e.preventDefault();
         globalCommandStack.redo();
+      }
+
+      if (e.key === 'Escape') {
+        useCanvasStore.getState().clearSelection();
       }
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -157,26 +166,8 @@ export const InfiniteCanvas: React.FC = () => {
     renderContentLayer();
   }, [renderContentLayer, strokes, shapes]);
 
-  // Отрисовка слоя выделения (рамка вокруг выбранных объектов)
-  useEffect(() => {
-    const canvas = selectionCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const hasSelection =
-      selectedStrokeIds.length > 0 ||
-      selectedShapeIds.length > 0 ||
-      selectedTextBlockIds.length > 0;
-
-    if (!hasSelection) return;
-
-    Viewport.applyTransform(ctx, camera, viewportSize, dpr);
-
-    // Находим общий bounding box для выделенных элементов
+  // Находим общий bounding box для выделенных элементов
+  const computeSelectionBounds = useCallback((): { minX: number; minY: number; maxX: number; maxY: number } | null => {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -215,7 +206,59 @@ export const InfiniteCanvas: React.FC = () => {
       }
     }
 
-    if (minX !== Infinity) {
+    if (minX === Infinity) return null;
+    return { minX, minY, maxX, maxY };
+  }, [selectedStrokeIds, selectedShapeIds, selectedTextBlockIds, strokes, shapes, textBlocks]);
+
+  // Поиск элемента под курсором (для клика)
+  const findItemAtPoint = useCallback((worldPos: { x: number; y: number }): Stroke | ShapeObject | null => {
+    const hitRadius = 14 / camera.zoom;
+    const searchRange = {
+      minX: worldPos.x - hitRadius,
+      minY: worldPos.y - hitRadius,
+      maxX: worldPos.x + hitRadius,
+      maxY: worldPos.y + hitRadius,
+    };
+    const candidates = spatialIndex.query(searchRange);
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      const item = candidates[i];
+      if ('points' in item) {
+        for (const p of item.points) {
+          if (Math.hypot(p.x - worldPos.x, p.y - worldPos.y) <= hitRadius + item.baseWidth / 2) {
+            return item;
+          }
+        }
+      } else if ('type' in item) {
+        const bounds = item.bounds;
+        if (
+          worldPos.x >= bounds.minX - hitRadius &&
+          worldPos.x <= bounds.maxX + hitRadius &&
+          worldPos.y >= bounds.minY - hitRadius &&
+          worldPos.y <= bounds.maxY + hitRadius
+        ) {
+          return item;
+        }
+      }
+    }
+    return null;
+  }, [camera.zoom, spatialIndex]);
+
+  // Отрисовка слоя выделения и кружка ластика
+  const renderSelectionAndCursorLayer = useCallback(() => {
+    const canvas = selectionCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    Viewport.applyTransform(ctx, camera, viewportSize, dpr);
+
+    // 1. Рамка выделения
+    const bounds = computeSelectionBounds();
+    if (bounds) {
+      const { minX, minY, maxX, maxY } = bounds;
       const pad = 8;
       ctx.save();
       ctx.strokeStyle = '#7719aa';
@@ -240,17 +283,41 @@ export const InfiniteCanvas: React.FC = () => {
       }
       ctx.restore();
     }
+
+    // 2. Кружок ластика под курсором
+    if (
+      (activeTool === 'point-eraser' || activeTool === 'stroke-eraser') &&
+      cursorWorldPosRef.current
+    ) {
+      const eraserRadius = 16 / camera.zoom;
+      const cp = cursorWorldPosRef.current;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cp.x, cp.y, eraserRadius, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.fill();
+      ctx.strokeStyle = '#333333';
+      ctx.lineWidth = 1.5 / camera.zoom;
+      ctx.setLineDash([4 / camera.zoom, 3 / camera.zoom]);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(cp.x, cp.y, 1.5 / camera.zoom, 0, Math.PI * 2);
+      ctx.fillStyle = '#333333';
+      ctx.fill();
+      ctx.restore();
+    }
   }, [
-    selectedStrokeIds,
-    selectedShapeIds,
-    selectedTextBlockIds,
-    strokes,
-    shapes,
-    textBlocks,
+    computeSelectionBounds,
+    activeTool,
     camera,
     viewportSize,
     dpr,
   ]);
+
+  useEffect(() => {
+    renderSelectionAndCursorLayer();
+  }, [renderSelectionAndCursorLayer, selectedStrokeIds, selectedShapeIds, selectedTextBlockIds]);
 
   // Обработка жестов колеса мыши / трекпада (Zoom и Pan)
   const handleWheel = (e: React.WheelEvent) => {
@@ -298,7 +365,7 @@ export const InfiniteCanvas: React.FC = () => {
 
     if (e.button !== 0) return; // Только ЛКМ для рисования
 
-    // 2. Режим курсора: перемещение выделенного или снятие
+    // 2. Режим курсора: перемещение выделенного или клик для снятия / выбора
     if (activeTool === 'cursor') {
       const hasSelection =
         selectedStrokeIds.length > 0 ||
@@ -306,15 +373,58 @@ export const InfiniteCanvas: React.FC = () => {
         selectedTextBlockIds.length > 0;
 
       if (hasSelection) {
+        const bounds = computeSelectionBounds();
+        const pad = 12 / camera.zoom;
+        const inside =
+          bounds &&
+          worldPos.x >= bounds.minX - pad &&
+          worldPos.x <= bounds.maxX + pad &&
+          worldPos.y >= bounds.minY - pad &&
+          worldPos.y <= bounds.maxY + pad;
+
+        if (inside) {
+          moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          return;
+        }
+
+        // Кликнули мимо рамки выделения: проверяем, не кликнули ли на другой объект
+        const hit = findItemAtPoint(worldPos);
+        if (hit) {
+          if ('points' in hit) {
+            setSelection([hit.id], [], []);
+          } else if ('type' in hit) {
+            setSelection([], [hit.id], []);
+          }
+          moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          return;
+        }
+
+        // Клик в пустое место: СНИМАЕМ ВЫДЕЛЕНИЕ!
+        clearSelection();
+        return;
+      }
+
+      // Если ничего не выделено: проверяем клик по объекту
+      const hit = findItemAtPoint(worldPos);
+      if (hit) {
+        if ('points' in hit) {
+          setSelection([hit.id], [], []);
+        } else if ('type' in hit) {
+          setSelection([], [hit.id], []);
+        }
         moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-        return;
       }
       return;
     }
 
-    // 3. Рисование пером / маркером
+    // 3. Рисование пером / маркером (снимаем выделение, если было)
     if (activeTool === 'pen' || activeTool === 'highlighter') {
+      if (selectedStrokeIds.length > 0 || selectedShapeIds.length > 0 || selectedTextBlockIds.length > 0) {
+        clearSelection();
+      }
       isPointerDownRef.current = true;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
@@ -358,6 +468,9 @@ export const InfiniteCanvas: React.FC = () => {
 
     // 4. Рисование фигур
     if (activeTool === 'shape') {
+      if (selectedStrokeIds.length > 0 || selectedShapeIds.length > 0 || selectedTextBlockIds.length > 0) {
+        clearSelection();
+      }
       isPointerDownRef.current = true;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
@@ -373,7 +486,11 @@ export const InfiniteCanvas: React.FC = () => {
 
     // 5. Ластик
     if (activeTool === 'stroke-eraser' || activeTool === 'point-eraser') {
+      if (selectedStrokeIds.length > 0 || selectedShapeIds.length > 0 || selectedTextBlockIds.length > 0) {
+        clearSelection();
+      }
       isPointerDownRef.current = true;
+      eraserInitialStrokesRef.current = [...useCanvasStore.getState().strokes];
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       handleEraserErase(worldPos);
       return;
@@ -389,31 +506,51 @@ export const InfiniteCanvas: React.FC = () => {
   };
 
   const handleEraserErase = (worldPos: { x: number; y: number }) => {
-    const eraserRadius = 18 / camera.zoom;
+    const eraserRadius = 16 / camera.zoom;
     const searchRange = {
-      minX: worldPos.x - eraserRadius,
-      minY: worldPos.y - eraserRadius,
-      maxX: worldPos.x + eraserRadius,
-      maxY: worldPos.y + eraserRadius,
+      minX: worldPos.x - eraserRadius - 10,
+      minY: worldPos.y - eraserRadius - 10,
+      maxX: worldPos.x + eraserRadius + 10,
+      maxY: worldPos.y + eraserRadius + 10,
     };
 
     const candidates = spatialIndex.query(searchRange);
-    const toDelete: string[] = [];
 
-    for (const item of candidates) {
-      if ('points' in item) {
-        for (const p of item.points) {
-          const dist = Math.hypot(p.x - worldPos.x, p.y - worldPos.y);
-          if (dist < eraserRadius + item.baseWidth / 2) {
-            toDelete.push(item.id);
-            break;
+    if (activeTool === 'point-eraser') {
+      const strokesToReplace = new Map<string, Stroke[]>();
+      let modified = false;
+
+      for (const item of candidates) {
+        if ('points' in item) {
+          const splitStrokes = erasePointsFromStroke(item, worldPos, eraserRadius);
+          if (splitStrokes.length !== 1 || splitStrokes[0].points.length !== item.points.length) {
+            strokesToReplace.set(item.id, splitStrokes);
+            modified = true;
           }
         }
       }
-    }
 
-    if (toDelete.length > 0) {
-      deleteStrokes(toDelete);
+      if (modified) {
+        useCanvasStore.getState().replaceStrokes(strokesToReplace);
+      }
+    } else {
+      // Поштриховой ластик
+      const toDelete: string[] = [];
+      for (const item of candidates) {
+        if ('points' in item) {
+          for (const p of item.points) {
+            const dist = Math.hypot(p.x - worldPos.x, p.y - worldPos.y);
+            if (dist < eraserRadius + item.baseWidth / 2) {
+              toDelete.push(item.id);
+              break;
+            }
+          }
+        }
+      }
+
+      if (toDelete.length > 0) {
+        deleteStrokes(toDelete);
+      }
     }
   };
 
@@ -442,12 +579,18 @@ export const InfiniteCanvas: React.FC = () => {
       return;
     }
 
-    if (!isPointerDownRef.current) return;
-
     const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     const worldPos = Viewport.screenToWorld(screenPos, camera, viewportSize);
 
-    // Ластик при движении
+    // Всегда обновляем круг ластика под курсором
+    if (activeTool === 'point-eraser' || activeTool === 'stroke-eraser') {
+      cursorWorldPosRef.current = worldPos;
+      renderSelectionAndCursorLayer();
+    }
+
+    if (!isPointerDownRef.current) return;
+
+    // Ластик при зажатом ЛКМ
     if (activeTool === 'stroke-eraser' || activeTool === 'point-eraser') {
       handleEraserErase(worldPos);
       return;
@@ -670,6 +813,36 @@ export const InfiniteCanvas: React.FC = () => {
       return;
     }
 
+    // Завершение ластика: фиксируем действие в стеке отмены (Ctrl+Z)
+    if (activeTool === 'stroke-eraser' || activeTool === 'point-eraser') {
+      if (eraserInitialStrokesRef.current) {
+        const prev = eraserInitialStrokesRef.current;
+        const curr = useCanvasStore.getState().strokes;
+        const isDifferent =
+          prev.length !== curr.length ||
+          prev.some((s, idx) => s.id !== curr[idx]?.id || s.points.length !== curr[idx]?.points.length);
+
+        if (isDifferent) {
+          globalCommandStack.execute({
+            execute: () => {
+              useCanvasStore.setState({ strokes: curr });
+              spatialIndex.rebuild([...curr, ...useCanvasStore.getState().shapes]);
+              useCanvasStore.getState().triggerAutosave();
+            },
+            undo: () => {
+              useCanvasStore.setState({ strokes: prev });
+              spatialIndex.rebuild([...prev, ...useCanvasStore.getState().shapes]);
+              useCanvasStore.getState().triggerAutosave();
+            },
+            description: 'Стирание ластиком',
+          });
+        }
+        eraserInitialStrokesRef.current = null;
+      }
+      renderSelectionAndCursorLayer();
+      return;
+    }
+
     // Завершение лассо: вычисляем выделенные элементы
     if (activeTool === 'lasso') {
       const lassoPts = lassoPointsRef.current;
@@ -681,7 +854,6 @@ export const InfiniteCanvas: React.FC = () => {
 
         for (const item of candidates) {
           if ('points' in item) {
-            // Проверяем попадание центра bbox штриха внутрь контура лассо
             const centerX = (item.bounds.minX + item.bounds.maxX) / 2;
             const centerY = (item.bounds.minY + item.bounds.maxY) / 2;
             if (isPointInPolygon({ x: centerX, y: centerY }, lassoPts)) {
@@ -696,7 +868,13 @@ export const InfiniteCanvas: React.FC = () => {
           }
         }
 
-        setSelection(selectedStrokes, selectedShapes, []);
+        if (selectedStrokes.length > 0 || selectedShapes.length > 0) {
+          setSelection(selectedStrokes, selectedShapes, []);
+        } else {
+          clearSelection();
+        }
+      } else {
+        clearSelection();
       }
 
       lassoPointsRef.current = [];
@@ -705,7 +883,15 @@ export const InfiniteCanvas: React.FC = () => {
         const ctx = selCanvas.getContext('2d');
         ctx?.clearRect(0, 0, selCanvas.width, selCanvas.height);
       }
+      renderSelectionAndCursorLayer();
       return;
+    }
+  };
+
+  const handlePointerLeave = () => {
+    if (cursorWorldPosRef.current) {
+      cursorWorldPosRef.current = null;
+      renderSelectionAndCursorLayer();
     }
   };
 
@@ -737,6 +923,7 @@ export const InfiniteCanvas: React.FC = () => {
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerLeave}
       onPointerCancel={handlePointerUp}
       onDoubleClick={handleDoubleClick}
       style={{

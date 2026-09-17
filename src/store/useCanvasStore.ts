@@ -16,8 +16,14 @@ import {
   loadPageData,
 } from '../db/storage';
 import { SpatialIndex } from '../canvas/engine/SpatialIndex';
+import { globalCommandStack } from '../canvas/history/CommandStack';
 
 interface CanvasState {
+  // История
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => void;
+  redo: () => void;
   // Инструменты
   activeTool: ToolType;
   penColor: string;
@@ -67,6 +73,7 @@ interface CanvasState {
   addStroke: (stroke: Stroke) => void;
   removeStroke: (strokeId: string) => void;
   deleteStrokes: (strokeIds: string[]) => void;
+  replaceStrokes: (replacements: Map<string, Stroke[]>) => void;
 
   addShape: (shape: ShapeObject) => void;
   removeShape: (shapeId: string) => void;
@@ -112,6 +119,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
   };
 
   return {
+    canUndo: false,
+    canRedo: false,
+    undo: () => globalCommandStack.undo(),
+    redo: () => globalCommandStack.redo(),
+
     activeTool: 'pen',
     penColor: '#201f1e',
     penWidth: 3,
@@ -136,7 +148,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     spatialIndex,
     saveStatus: 'saved',
 
-    setActiveTool: (tool) => set({ activeTool: tool }),
+    setActiveTool: (tool) => {
+      set({ activeTool: tool });
+      if (tool !== 'cursor' && tool !== 'lasso') {
+        get().clearSelection();
+      }
+    },
     setPenColor: (color) => set({ penColor: color }),
     setPenWidth: (width) => set({ penWidth: width }),
     setHighlighterColor: (color) => set({ highlighterColor: color }),
@@ -159,6 +176,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     loadPage: async (pageId: string, initialCamera?: Camera, initialBg?: CanvasBackground) => {
+      globalCommandStack.clear();
       set({ currentPageId: pageId });
       const { strokes, shapes, textBlocks } = await loadPageData(pageId);
 
@@ -174,13 +192,31 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         camera: initialCamera ?? { x: 260, y: 150, zoom: 1 },
         background: initialBg ?? 'plain',
         saveStatus: 'saved',
+        canUndo: false,
+        canRedo: false,
       });
     },
 
     addStroke: (stroke) => {
-      spatialIndex.insert(stroke);
-      set((state) => ({ strokes: [...state.strokes, stroke] }));
-      scheduleSave();
+      globalCommandStack.execute({
+        execute: () => {
+          set((state) => {
+            if (state.strokes.some((s) => s.id === stroke.id)) return state;
+            return { strokes: [...state.strokes, stroke] };
+          });
+          spatialIndex.insert(stroke);
+          scheduleSave();
+        },
+        undo: () => {
+          set((state) => {
+            const nextStrokes = state.strokes.filter((s) => s.id !== stroke.id);
+            spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+            return { strokes: nextStrokes };
+          });
+          scheduleSave();
+        },
+        description: 'Добавление штриха',
+      });
     },
 
     removeStroke: (strokeId) => {
@@ -195,8 +231,41 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     deleteStrokes: (strokeIds) => {
       if (strokeIds.length === 0) return;
       const idsSet = new Set(strokeIds);
+      const deletedStrokes = get().strokes.filter((s) => idsSet.has(s.id));
+      if (deletedStrokes.length === 0) return;
+
+      globalCommandStack.execute({
+        execute: () => {
+          set((state) => {
+            const nextStrokes = state.strokes.filter((s) => !idsSet.has(s.id));
+            spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+            return { strokes: nextStrokes };
+          });
+          scheduleSave();
+        },
+        undo: () => {
+          set((state) => {
+            const nextStrokes = [...state.strokes, ...deletedStrokes];
+            spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+            return { strokes: nextStrokes };
+          });
+          scheduleSave();
+        },
+        description: 'Удаление штрихов',
+      });
+    },
+
+    replaceStrokes: (replacements: Map<string, Stroke[]>) => {
       set((state) => {
-        const nextStrokes = state.strokes.filter((s) => !idsSet.has(s.id));
+        const nextStrokes: Stroke[] = [];
+        for (const s of state.strokes) {
+          if (replacements.has(s.id)) {
+            const parts = replacements.get(s.id)!;
+            nextStrokes.push(...parts);
+          } else {
+            nextStrokes.push(s);
+          }
+        }
         spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
         return { strokes: nextStrokes };
       });
@@ -204,9 +273,25 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     addShape: (shape) => {
-      spatialIndex.insert(shape);
-      set((state) => ({ shapes: [...state.shapes, shape] }));
-      scheduleSave();
+      globalCommandStack.execute({
+        execute: () => {
+          set((state) => {
+            if (state.shapes.some((s) => s.id === shape.id)) return state;
+            return { shapes: [...state.shapes, shape] };
+          });
+          spatialIndex.insert(shape);
+          scheduleSave();
+        },
+        undo: () => {
+          set((state) => {
+            const nextShapes = state.shapes.filter((s) => s.id !== shape.id);
+            spatialIndex.rebuild([...state.strokes, ...nextShapes]);
+            return { shapes: nextShapes };
+          });
+          scheduleSave();
+        },
+        description: 'Добавление фигуры',
+      });
     },
 
     removeShape: (shapeId) => {
@@ -219,8 +304,22 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     addTextBlock: (block) => {
-      set((state) => ({ textBlocks: [...state.textBlocks, block] }));
-      scheduleSave();
+      globalCommandStack.execute({
+        execute: () => {
+          set((state) => {
+            if (state.textBlocks.some((b) => b.id === block.id)) return state;
+            return { textBlocks: [...state.textBlocks, block] };
+          });
+          scheduleSave();
+        },
+        undo: () => {
+          set((state) => ({
+            textBlocks: state.textBlocks.filter((b) => b.id !== block.id),
+          }));
+          scheduleSave();
+        },
+        description: 'Добавить заметку',
+      });
     },
 
     updateTextBlock: (id, updates) => {
@@ -310,30 +409,66 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     deleteSelectedItems: () => {
-      const { selectedStrokeIds, selectedShapeIds, selectedTextBlockIds } = get();
+      const { selectedStrokeIds, selectedShapeIds, selectedTextBlockIds, strokes, shapes, textBlocks } = get();
+      if (!selectedStrokeIds.length && !selectedShapeIds.length && !selectedTextBlockIds.length) return;
+
       const strokeSet = new Set(selectedStrokeIds);
       const shapeSet = new Set(selectedShapeIds);
       const tbSet = new Set(selectedTextBlockIds);
 
-      set((state) => {
-        const nextStrokes = state.strokes.filter((s) => !strokeSet.has(s.id));
-        const nextShapes = state.shapes.filter((sh) => !shapeSet.has(sh.id));
-        const nextTextBlocks = state.textBlocks.filter((tb) => !tbSet.has(tb.id));
-        spatialIndex.rebuild([...nextStrokes, ...nextShapes]);
+      const deletedStrokes = strokes.filter((s) => strokeSet.has(s.id));
+      const deletedShapes = shapes.filter((sh) => shapeSet.has(sh.id));
+      const deletedTextBlocks = textBlocks.filter((tb) => tbSet.has(tb.id));
 
-        return {
-          strokes: nextStrokes,
-          shapes: nextShapes,
-          textBlocks: nextTextBlocks,
-          selectedStrokeIds: [],
-          selectedShapeIds: [],
-          selectedTextBlockIds: [],
-        };
+      globalCommandStack.execute({
+        execute: () => {
+          set((state) => {
+            const nextStrokes = state.strokes.filter((s) => !strokeSet.has(s.id));
+            const nextShapes = state.shapes.filter((sh) => !shapeSet.has(sh.id));
+            const nextTextBlocks = state.textBlocks.filter((tb) => !tbSet.has(tb.id));
+            spatialIndex.rebuild([...nextStrokes, ...nextShapes]);
+
+            return {
+              strokes: nextStrokes,
+              shapes: nextShapes,
+              textBlocks: nextTextBlocks,
+              selectedStrokeIds: [],
+              selectedShapeIds: [],
+              selectedTextBlockIds: [],
+            };
+          });
+          scheduleSave();
+        },
+        undo: () => {
+          set((state) => {
+            const nextStrokes = [...state.strokes, ...deletedStrokes];
+            const nextShapes = [...state.shapes, ...deletedShapes];
+            const nextTextBlocks = [...state.textBlocks, ...deletedTextBlocks];
+            spatialIndex.rebuild([...nextStrokes, ...nextShapes]);
+
+            return {
+              strokes: nextStrokes,
+              shapes: nextShapes,
+              textBlocks: nextTextBlocks,
+              selectedStrokeIds,
+              selectedShapeIds,
+              selectedTextBlockIds,
+            };
+          });
+          scheduleSave();
+        },
+        description: 'Удалить выделенное',
       });
-
-      scheduleSave();
     },
 
     triggerAutosave: scheduleSave,
   };
+});
+
+// Синхронизация состояния canUndo / canRedo с хранилищем
+globalCommandStack.subscribe(() => {
+  useCanvasStore.setState({
+    canUndo: globalCommandStack.canUndo(),
+    canRedo: globalCommandStack.canRedo(),
+  });
 });

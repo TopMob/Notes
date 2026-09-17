@@ -1,5 +1,7 @@
 import React from 'react';
 import {
+  Undo2,
+  Redo2,
   Bold,
   Italic,
   Underline,
@@ -12,7 +14,7 @@ import {
 import { useCanvasStore } from '../../store/useCanvasStore';
 
 export const RibbonHome: React.FC = () => {
-  const { addTextBlock, camera, currentPageId } = useCanvasStore();
+  const { addTextBlock, camera, currentPageId, canUndo, canRedo, undo, redo } = useCanvasStore();
 
   const handleCreateTextBlock = () => {
     if (!currentPageId) return;
@@ -33,6 +35,28 @@ export const RibbonHome: React.FC = () => {
 
   return (
     <div className="ribbon-toolbar">
+      {/* Undo / Redo */}
+      <div className="toolbar-group">
+        <button
+          className="tool-btn icon-only"
+          onClick={undo}
+          disabled={!canUndo}
+          title="Отменить (Ctrl+Z)"
+        >
+          <Undo2 size={16} />
+        </button>
+        <button
+          className="tool-btn icon-only"
+          onClick={redo}
+          disabled={!canRedo}
+          title="Повторить (Ctrl+Y)"
+        >
+          <Redo2 size={16} />
+        </button>
+      </div>
+
+      <div className="toolbar-divider" />
+
       {/* Быстрое добавление блока */}
       <div className="toolbar-group">
         <button

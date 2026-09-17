@@ -17,7 +17,6 @@ import {
   SplitSquareVertical,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
-import { globalCommandStack } from '../../canvas/history/CommandStack';
 
 const PRESET_COLORS = [
   { name: 'Черный', value: '#201f1e' },
@@ -49,6 +48,10 @@ export const RibbonDraw: React.FC = () => {
     selectedStrokeIds,
     selectedShapeIds,
     selectedTextBlockIds,
+    canUndo,
+    canRedo,
+    undo,
+    redo,
   } = useCanvasStore();
 
   const [isEraserMenuOpen, setIsEraserMenuOpen] = useState(false);
@@ -60,23 +63,22 @@ export const RibbonDraw: React.FC = () => {
     selectedShapeIds.length > 0 ||
     selectedTextBlockIds.length > 0;
 
-  const handleUndo = () => globalCommandStack.undo();
-  const handleRedo = () => globalCommandStack.redo();
-
   return (
     <div className="ribbon-toolbar">
       {/* Группа Истории: Undo / Redo */}
       <div className="toolbar-group">
         <button
           className="tool-btn icon-only"
-          onClick={handleUndo}
+          onClick={undo}
+          disabled={!canUndo}
           title="Отменить (Ctrl+Z)"
         >
           <Undo2 size={16} />
         </button>
         <button
           className="tool-btn icon-only"
-          onClick={handleRedo}
+          onClick={redo}
+          disabled={!canRedo}
           title="Повторить (Ctrl+Y)"
         >
           <Redo2 size={16} />
@@ -105,7 +107,7 @@ export const RibbonDraw: React.FC = () => {
           <span className="tool-btn-label">Лассо</span>
         </button>
 
-        {/* Ластик с меню */}
+        {/* Ластик с меню (по умолчанию точечный ластик) */}
         <div className="dropdown-wrapper">
           <button
             className={`tool-btn ${
@@ -113,31 +115,22 @@ export const RibbonDraw: React.FC = () => {
             }`}
             onClick={() => {
               if (activeTool !== 'stroke-eraser' && activeTool !== 'point-eraser') {
-                setActiveTool('stroke-eraser');
+                setActiveTool('point-eraser');
               } else {
                 setIsEraserMenuOpen(!isEraserMenuOpen);
               }
             }}
-            title="Ластик (кликните для выбора режима)"
+            title="Ластик (кликните для переключения режима)"
           >
             <Eraser size={16} />
             <span className="tool-btn-label">
-              {activeTool === 'point-eraser' ? 'Точечный' : 'Ластик'}
+              {activeTool === 'stroke-eraser' ? 'Поштриховой' : 'Ластик'}
             </span>
             <ChevronDown size={11} className="chevron" />
           </button>
 
           {isEraserMenuOpen && (
             <div className="dropdown-menu">
-              <button
-                className={`dropdown-item ${activeTool === 'stroke-eraser' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTool('stroke-eraser');
-                  setIsEraserMenuOpen(false);
-                }}
-              >
-                <span>Поштриховой ластик</span>
-              </button>
               <button
                 className={`dropdown-item ${activeTool === 'point-eraser' ? 'active' : ''}`}
                 onClick={() => {
@@ -146,6 +139,15 @@ export const RibbonDraw: React.FC = () => {
                 }}
               >
                 <span>Точечный ластик</span>
+              </button>
+              <button
+                className={`dropdown-item ${activeTool === 'stroke-eraser' ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveTool('stroke-eraser');
+                  setIsEraserMenuOpen(false);
+                }}
+              >
+                <span>Поштриховой ластик</span>
               </button>
             </div>
           )}
