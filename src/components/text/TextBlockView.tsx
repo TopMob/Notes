@@ -14,6 +14,19 @@ interface TextBlockViewProps {
   onSelect: () => void;
 }
 
+export const STRUCTURAL_SELECTORS =
+  'table, img, .onenote-callout, .katex-rendered-block, [data-latex], canvas, [data-embed], input[type="checkbox"], hr, iframe';
+
+/**
+ * Проверяет, является ли текстовый блок действительно пустым.
+ * Предотвращает случайное удаление блоков, содержащих таблицы, выноски, формулы или чекбоксы.
+ */
+export function isBlockEmpty(container: HTMLElement): boolean {
+  const hasText = (container.textContent || '').trim().length > 0;
+  const hasStructuralContent = container.querySelector(STRUCTURAL_SELECTORS) !== null;
+  return !hasText && !hasStructuralContent;
+}
+
 export const TextBlockView: React.FC<TextBlockViewProps> = ({
   block,
   camera,
@@ -193,6 +206,36 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
     initialHeight: number;
   } | null>(null);
 
+  /**
+   * Обеспечивает наличие colgroup и элементов col для каждого столбца таблицы OneNote,
+   * предотвращая сжатие соседних столбцов и "расползание" при вводе текста.
+   */
+  const ensureTableColGroup = (table: HTMLTableElement): HTMLTableColElement[] => {
+    let colgroup = table.querySelector('colgroup');
+    const firstRow = table.rows[0];
+    if (!firstRow) return [];
+    const colCount = firstRow.cells.length;
+
+    if (!colgroup) {
+      colgroup = document.createElement('colgroup');
+      for (let i = 0; i < colCount; i++) {
+        const col = document.createElement('col');
+        const measured = firstRow.cells[i]?.offsetWidth || 100;
+        col.style.width = `${measured}px`;
+        colgroup.appendChild(col);
+      }
+      table.insertBefore(colgroup, table.firstChild);
+    }
+
+    while (colgroup.children.length < colCount) {
+      const col = document.createElement('col');
+      col.style.width = '100px';
+      colgroup.appendChild(col);
+    }
+
+    return Array.from(colgroup.children) as HTMLTableColElement[];
+  };
+
   const handleContentPointerMove = (e: React.PointerEvent) => {
     // 1. Активный ресайз столбца или строки
     if (tableResizeRef.current) {
@@ -204,6 +247,18 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         const colIdx = cell.cellIndex;
         if (table) {
           table.style.tableLayout = 'fixed';
+          const cols = ensureTableColGroup(table);
+          if (cols[colIdx]) {
+            cols[colIdx].style.width = `${newWidth}px`;
+          }
+
+          let totalWidth = 0;
+          for (let i = 0; i < cols.length; i++) {
+            const w = i === colIdx ? newWidth : (parseFloat(cols[i].style.width) || cols[i].offsetWidth || 100);
+            totalWidth += w;
+          }
+          table.style.width = `${totalWidth}px`;
+
           for (let r = 0; r < table.rows.length; r++) {
             const c = table.rows[r].cells[colIdx];
             if (c) c.style.width = `${newWidth}px`;
@@ -284,14 +339,15 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
 
   const handleBlur = () => {
     if (!contentRef.current) return;
-    let html = contentRef.current.innerHTML;
-    const plainText = contentRef.current.innerText.trim();
 
     // Авто-удаление пустого блока (OneNote поведение)
-    if (!plainText && !html.includes('<img') && !html.includes('katex')) {
-      removeTextBlock(block.id);
+    // Сохраняет блоки с таблицами, выносками, картинками, формулами даже без текста
+    if (isBlockEmpty(contentRef.current)) {
+      removeTextBlock(block.id, true);
       return;
     }
+
+    let html = contentRef.current.innerHTML;
 
     // Авто-конвертация введенных $formula$ в рендерируемые KaTeX блоки
     // Заменяет $latex$ вне существующих тегов
@@ -329,7 +385,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
           className="btn-delete-block"
           onClick={(e) => {
             e.stopPropagation();
-            removeTextBlock(block.id);
+            removeTextBlock(block.id, false);
           }}
           title="Удалить контейнер"
         >

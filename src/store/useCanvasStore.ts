@@ -11,14 +11,45 @@ import {
 } from '../types/canvas';
 import { TextBlock } from '../types/textblock';
 import {
-  savePageStrokes,
-  savePageShapes,
-  savePageTextBlocks,
-  updatePageMetadata,
+  savePageDiff,
+  savePageFull,
   loadPageData,
+  PageDiff,
 } from '../db/storage';
 import { SpatialIndex } from '../canvas/engine/SpatialIndex';
 import { globalCommandStack } from '../canvas/history/CommandStack';
+
+interface PageDirtyTracker {
+  strokesPut: Map<string, Stroke>;
+  strokesDelete: Set<string>;
+  shapesPut: Map<string, ShapeObject>;
+  shapesDelete: Set<string>;
+  textBlocksPut: Map<string, TextBlock>;
+  textBlocksDelete: Set<string>;
+  metadata: Partial<{ camera: Camera; background: CanvasBackground }> | null;
+  fullSync?: boolean;
+}
+
+const pageDirtyMap = new Map<string, PageDirtyTracker>();
+const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingSaves = new Map<string, Promise<void>>();
+
+function getOrCreateDirty(pageId: string): PageDirtyTracker {
+  let d = pageDirtyMap.get(pageId);
+  if (!d) {
+    d = {
+      strokesPut: new Map(),
+      strokesDelete: new Set(),
+      shapesPut: new Map(),
+      shapesDelete: new Set(),
+      textBlocksPut: new Map(),
+      textBlocksDelete: new Set(),
+      metadata: null,
+    };
+    pageDirtyMap.set(pageId, d);
+  }
+  return d;
+}
 
 interface CanvasState {
   // История
@@ -26,6 +57,7 @@ interface CanvasState {
   canRedo: boolean;
   undo: () => void;
   redo: () => void;
+
   // Инструменты
   activeTool: ToolType;
   penColor: string;
@@ -51,7 +83,7 @@ interface CanvasState {
   selectedShapeIds: string[];
   selectedTextBlockIds: string[];
 
-  // Пространственный индекс (Quadtree)
+  // Пространственный индекс
   spatialIndex: SpatialIndex;
 
   // Статус сохранения
@@ -82,7 +114,7 @@ interface CanvasState {
 
   addTextBlock: (block: TextBlock) => void;
   updateTextBlock: (id: string, updates: Partial<TextBlock>) => void;
-  removeTextBlock: (id: string) => void;
+  removeTextBlock: (id: string, skipHistory?: boolean) => void;
 
   // Настройки пера и палитры
   penCursorStyle: PenCursorStyle;
@@ -107,35 +139,115 @@ interface CanvasState {
   ) => void;
   deleteSelectedItems: () => void;
 
+  flushSave: (targetPageId?: string) => Promise<void>;
   triggerAutosave: () => void;
 }
-
-let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 
 export const useCanvasStore = create<CanvasState>((set, get) => {
   const spatialIndex = new SpatialIndex();
 
-  const scheduleSave = () => {
-    set({ saveStatus: 'saving' });
-    if (saveTimeout) clearTimeout(saveTimeout);
+  /**
+   * Принудительное атомарное сохранение diff-изменений страницы.
+   * Дожидается завершения предыдущей операции сохранения для этой страницы.
+   */
+  const flushSave = async (targetPageId?: string): Promise<void> => {
+    const pageId = targetPageId || get().currentPageId;
+    if (!pageId) return;
 
-    saveTimeout = setTimeout(async () => {
-      const { currentPageId, strokes, shapes, textBlocks, camera, background } = get();
-      if (!currentPageId) return;
+    // Сбрасываем ожидающий таймер debounce
+    const timer = saveTimers.get(pageId);
+    if (timer) {
+      clearTimeout(timer);
+      saveTimers.delete(pageId);
+    }
 
+    // Если прямо сейчас идет сохранение этой страницы — дожидаемся
+    const inFlight = pendingSaves.get(pageId);
+    if (inFlight) {
       try {
-        await Promise.all([
-          savePageStrokes(currentPageId, strokes),
-          savePageShapes(currentPageId, shapes),
-          savePageTextBlocks(currentPageId, textBlocks),
-          updatePageMetadata(currentPageId, { camera, background }),
-        ]);
-        set({ saveStatus: 'saved' });
-      } catch (err) {
-        console.error('Ошибка сохранения страницы в IndexedDB:', err);
-        set({ saveStatus: 'saved' });
+        await inFlight;
+      } catch {
+        // ignore
       }
+    }
+
+    const dirty = pageDirtyMap.get(pageId);
+    if (!dirty) {
+      return;
+    }
+
+    // Извлекаем текущий срез изменений и сбрасываем dirty
+    pageDirtyMap.delete(pageId);
+
+    const performSave = async () => {
+      set({ saveStatus: 'saving' });
+      try {
+        if (dirty.fullSync) {
+          const { strokes, shapes, textBlocks, camera, background } = get();
+          await savePageFull(pageId, { strokes, shapes, textBlocks, camera, background });
+        } else {
+          const diff: PageDiff = {};
+          if (dirty.strokesPut.size > 0 || dirty.strokesDelete.size > 0) {
+            diff.strokes = {
+              put: dirty.strokesPut.size > 0 ? Array.from(dirty.strokesPut.values()) : undefined,
+              deleteIds: dirty.strokesDelete.size > 0 ? Array.from(dirty.strokesDelete) : undefined,
+            };
+          }
+          if (dirty.shapesPut.size > 0 || dirty.shapesDelete.size > 0) {
+            diff.shapes = {
+              put: dirty.shapesPut.size > 0 ? Array.from(dirty.shapesPut.values()) : undefined,
+              deleteIds: dirty.shapesDelete.size > 0 ? Array.from(dirty.shapesDelete) : undefined,
+            };
+          }
+          if (dirty.textBlocksPut.size > 0 || dirty.textBlocksDelete.size > 0) {
+            diff.textBlocks = {
+              put: dirty.textBlocksPut.size > 0 ? Array.from(dirty.textBlocksPut.values()) : undefined,
+              deleteIds: dirty.textBlocksDelete.size > 0 ? Array.from(dirty.textBlocksDelete) : undefined,
+            };
+          }
+          if (dirty.metadata) {
+            diff.metadata = dirty.metadata;
+          }
+
+          // Выполняем запись только если есть реальные изменения
+          if (diff.strokes || diff.shapes || diff.textBlocks || diff.metadata) {
+            await savePageDiff(pageId, diff);
+          }
+        }
+      } catch (err) {
+        console.error(`Ошибка сохранения страницы ${pageId} в IndexedDB:`, err);
+      } finally {
+        set({ saveStatus: 'saved' });
+        pendingSaves.delete(pageId);
+      }
+    };
+
+    const savePromise = performSave();
+    pendingSaves.set(pageId, savePromise);
+    await savePromise;
+  };
+
+  /**
+   * Отложенное планирование сохранения страницы (debounce 400 мс).
+   * Захватывает конкретный pageId, защищая от гонок при переключении страниц.
+   */
+  const scheduleSave = (targetPageId?: string) => {
+    const pageId = targetPageId || get().currentPageId;
+    if (!pageId) return;
+
+    set({ saveStatus: 'saving' });
+
+    const existingTimer = saveTimers.get(pageId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const newTimer = setTimeout(() => {
+      saveTimers.delete(pageId);
+      flushSave(pageId);
     }, 400);
+
+    saveTimers.set(pageId, newTimer);
   };
 
   return {
@@ -174,7 +286,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         return { quickColors: next };
       }),
 
-    highlighterColor: '#fff176', // Soft sunny highlighter yellow
+    highlighterColor: '#fff176',
     highlighterWidth: 20,
     shapeType: 'rect',
     shapeColor: '#201f1e',
@@ -217,24 +329,43 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     setCamera: (cameraOrFn) => {
       set((state) => {
         const newCamera = typeof cameraOrFn === 'function' ? cameraOrFn(state.camera) : cameraOrFn;
+        const pageId = state.currentPageId;
+        if (pageId) {
+          const d = getOrCreateDirty(pageId);
+          d.metadata = { ...d.metadata, camera: newCamera };
+          scheduleSave(pageId);
+        }
         return { camera: newCamera };
       });
-      scheduleSave();
     },
 
     setBackground: (background) => {
-      set({ background });
-      scheduleSave();
+      set((state) => {
+        const pageId = state.currentPageId;
+        if (pageId) {
+          const d = getOrCreateDirty(pageId);
+          d.metadata = { ...d.metadata, background };
+          scheduleSave(pageId);
+        }
+        return { background };
+      });
     },
 
     loadPage: async (pageId: string, initialCamera?: Camera, initialBg?: CanvasBackground) => {
+      const prevPageId = get().currentPageId;
+      if (prevPageId && prevPageId !== pageId) {
+        // Принудительно сохраняем предыдущую страницу до переключения
+        await flushSave(prevPageId);
+      }
+
       globalCommandStack.clear();
-      set({ currentPageId: pageId });
+
       const { strokes, shapes, textBlocks } = await loadPageData(pageId);
 
       spatialIndex.rebuild([...strokes, ...shapes]);
 
       set({
+        currentPageId: pageId,
         strokes,
         shapes,
         textBlocks,
@@ -250,6 +381,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     addStroke: (stroke) => {
+      const pageId = get().currentPageId;
       globalCommandStack.execute({
         execute: () => {
           set((state) => {
@@ -257,7 +389,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             return { strokes: [...state.strokes, stroke] };
           });
           spatialIndex.insert(stroke);
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.strokesPut.set(stroke.id, stroke);
+            d.strokesDelete.delete(stroke.id);
+            scheduleSave(pageId);
+          }
         },
         undo: () => {
           set((state) => {
@@ -265,19 +402,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
             return { strokes: nextStrokes };
           });
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.strokesDelete.add(stroke.id);
+            d.strokesPut.delete(stroke.id);
+            scheduleSave(pageId);
+          }
         },
         description: 'Добавление штриха',
       });
     },
 
     removeStroke: (strokeId) => {
+      const pageId = get().currentPageId;
       set((state) => {
         const nextStrokes = state.strokes.filter((s) => s.id !== strokeId);
         spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
         return { strokes: nextStrokes };
       });
-      scheduleSave();
+      if (pageId) {
+        const d = getOrCreateDirty(pageId);
+        d.strokesDelete.add(strokeId);
+        d.strokesPut.delete(strokeId);
+        scheduleSave(pageId);
+      }
     },
 
     deleteStrokes: (strokeIds) => {
@@ -285,6 +433,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const idsSet = new Set(strokeIds);
       const deletedStrokes = get().strokes.filter((s) => idsSet.has(s.id));
       if (deletedStrokes.length === 0) return;
+      const pageId = get().currentPageId;
 
       globalCommandStack.execute({
         execute: () => {
@@ -293,7 +442,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
             return { strokes: nextStrokes };
           });
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            for (const id of strokeIds) {
+              d.strokesDelete.add(id);
+              d.strokesPut.delete(id);
+            }
+            scheduleSave(pageId);
+          }
         },
         undo: () => {
           set((state) => {
@@ -301,13 +457,21 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
             return { strokes: nextStrokes };
           });
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            for (const s of deletedStrokes) {
+              d.strokesPut.set(s.id, s);
+              d.strokesDelete.delete(s.id);
+            }
+            scheduleSave(pageId);
+          }
         },
         description: 'Удаление штрихов',
       });
     },
 
     replaceStrokes: (replacements: Map<string, Stroke[]>) => {
+      const pageId = get().currentPageId;
       set((state) => {
         const nextStrokes: Stroke[] = [];
         for (const s of state.strokes) {
@@ -321,10 +485,22 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
         return { strokes: nextStrokes };
       });
-      scheduleSave();
+      if (pageId) {
+        const d = getOrCreateDirty(pageId);
+        for (const [oldId, parts] of replacements.entries()) {
+          d.strokesDelete.add(oldId);
+          d.strokesPut.delete(oldId);
+          for (const p of parts) {
+            d.strokesPut.set(p.id, p);
+            d.strokesDelete.delete(p.id);
+          }
+        }
+        scheduleSave(pageId);
+      }
     },
 
     addShape: (shape) => {
+      const pageId = get().currentPageId;
       globalCommandStack.execute({
         execute: () => {
           set((state) => {
@@ -332,7 +508,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             return { shapes: [...state.shapes, shape] };
           });
           spatialIndex.insert(shape);
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.shapesPut.set(shape.id, shape);
+            d.shapesDelete.delete(shape.id);
+            scheduleSave(pageId);
+          }
         },
         undo: () => {
           set((state) => {
@@ -340,52 +521,126 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             spatialIndex.rebuild([...state.strokes, ...nextShapes]);
             return { shapes: nextShapes };
           });
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.shapesDelete.add(shape.id);
+            d.shapesPut.delete(shape.id);
+            scheduleSave(pageId);
+          }
         },
         description: 'Добавление фигуры',
       });
     },
 
     removeShape: (shapeId) => {
+      const pageId = get().currentPageId;
       set((state) => {
         const nextShapes = state.shapes.filter((s) => s.id !== shapeId);
         spatialIndex.rebuild([...state.strokes, ...nextShapes]);
         return { shapes: nextShapes };
       });
-      scheduleSave();
+      if (pageId) {
+        const d = getOrCreateDirty(pageId);
+        d.shapesDelete.add(shapeId);
+        d.shapesPut.delete(shapeId);
+        scheduleSave(pageId);
+      }
     },
 
     addTextBlock: (block) => {
+      const pageId = get().currentPageId;
       globalCommandStack.execute({
         execute: () => {
           set((state) => {
             if (state.textBlocks.some((b) => b.id === block.id)) return state;
             return { textBlocks: [...state.textBlocks, block] };
           });
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.textBlocksPut.set(block.id, block);
+            d.textBlocksDelete.delete(block.id);
+            scheduleSave(pageId);
+          }
         },
         undo: () => {
           set((state) => ({
             textBlocks: state.textBlocks.filter((b) => b.id !== block.id),
           }));
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.textBlocksDelete.add(block.id);
+            d.textBlocksPut.delete(block.id);
+            scheduleSave(pageId);
+          }
         },
         description: 'Добавить заметку',
       });
     },
 
     updateTextBlock: (id, updates) => {
-      set((state) => ({
-        textBlocks: state.textBlocks.map((b) => (b.id === id ? { ...b, ...updates } : b)),
-      }));
-      scheduleSave();
+      const pageId = get().currentPageId;
+      let updatedBlock: TextBlock | undefined;
+      set((state) => {
+        const nextBlocks = state.textBlocks.map((b) => {
+          if (b.id === id) {
+            updatedBlock = { ...b, ...updates };
+            return updatedBlock;
+          }
+          return b;
+        });
+        return { textBlocks: nextBlocks };
+      });
+      if (pageId && updatedBlock) {
+        const d = getOrCreateDirty(pageId);
+        d.textBlocksPut.set(id, updatedBlock);
+        d.textBlocksDelete.delete(id);
+        scheduleSave(pageId);
+      }
     },
 
-    removeTextBlock: (id) => {
-      set((state) => ({
-        textBlocks: state.textBlocks.filter((b) => b.id !== id),
-      }));
-      scheduleSave();
+    removeTextBlock: (id, skipHistory = false) => {
+      const pageId = get().currentPageId;
+      const targetBlock = get().textBlocks.find((b) => b.id === id);
+      if (!targetBlock) return;
+
+      if (skipHistory) {
+        set((state) => ({
+          textBlocks: state.textBlocks.filter((b) => b.id !== id),
+        }));
+        if (pageId) {
+          const d = getOrCreateDirty(pageId);
+          d.textBlocksDelete.add(id);
+          d.textBlocksPut.delete(id);
+          scheduleSave(pageId);
+        }
+        return;
+      }
+
+      globalCommandStack.execute({
+        execute: () => {
+          set((state) => ({
+            textBlocks: state.textBlocks.filter((b) => b.id !== id),
+          }));
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.textBlocksDelete.add(id);
+            d.textBlocksPut.delete(id);
+            scheduleSave(pageId);
+          }
+        },
+        undo: () => {
+          set((state) => ({
+            textBlocks: [...state.textBlocks, targetBlock],
+          }));
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.textBlocksPut.set(targetBlock.id, targetBlock);
+            d.textBlocksDelete.delete(targetBlock.id);
+            scheduleSave(pageId);
+          }
+        },
+        description: 'Удалить текстовый блок',
+      });
     },
 
     setSelection: (strokeIds, shapeIds, textBlockIds) => {
@@ -457,13 +712,27 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         };
       });
 
-      scheduleSave();
+      const pageId = get().currentPageId;
+      if (pageId) {
+        const d = getOrCreateDirty(pageId);
+        for (const s of get().strokes) {
+          if (strokeSet.has(s.id)) d.strokesPut.set(s.id, s);
+        }
+        for (const sh of get().shapes) {
+          if (shapeSet.has(sh.id)) d.shapesPut.set(sh.id, sh);
+        }
+        for (const tb of get().textBlocks) {
+          if (tbSet.has(tb.id)) d.textBlocksPut.set(tb.id, tb);
+        }
+        scheduleSave(pageId);
+      }
     },
 
     commitMoveItems: (prevStrokes, prevShapes, prevTextBlocks) => {
       const currentStrokes = [...get().strokes];
       const currentShapes = [...get().shapes];
       const currentTextBlocks = [...get().textBlocks];
+      const pageId = get().currentPageId;
 
       globalCommandStack.execute({
         execute: () => {
@@ -473,7 +742,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             textBlocks: currentTextBlocks,
           });
           spatialIndex.rebuild([...currentStrokes, ...currentShapes]);
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            for (const s of currentStrokes) d.strokesPut.set(s.id, s);
+            for (const sh of currentShapes) d.shapesPut.set(sh.id, sh);
+            for (const tb of currentTextBlocks) d.textBlocksPut.set(tb.id, tb);
+            scheduleSave(pageId);
+          }
         },
         undo: () => {
           set({
@@ -482,7 +757,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             textBlocks: prevTextBlocks,
           });
           spatialIndex.rebuild([...prevStrokes, ...prevShapes]);
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            for (const s of prevStrokes) d.strokesPut.set(s.id, s);
+            for (const sh of prevShapes) d.shapesPut.set(sh.id, sh);
+            for (const tb of prevTextBlocks) d.textBlocksPut.set(tb.id, tb);
+            scheduleSave(pageId);
+          }
         },
         description: 'Перемещение объектов',
       });
@@ -499,6 +780,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const deletedStrokes = strokes.filter((s) => strokeSet.has(s.id));
       const deletedShapes = shapes.filter((sh) => shapeSet.has(sh.id));
       const deletedTextBlocks = textBlocks.filter((tb) => tbSet.has(tb.id));
+      const pageId = get().currentPageId;
 
       globalCommandStack.execute({
         execute: () => {
@@ -517,7 +799,22 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
               selectedTextBlockIds: [],
             };
           });
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            for (const s of deletedStrokes) {
+              d.strokesDelete.add(s.id);
+              d.strokesPut.delete(s.id);
+            }
+            for (const sh of deletedShapes) {
+              d.shapesDelete.add(sh.id);
+              d.shapesPut.delete(sh.id);
+            }
+            for (const tb of deletedTextBlocks) {
+              d.textBlocksDelete.add(tb.id);
+              d.textBlocksPut.delete(tb.id);
+            }
+            scheduleSave(pageId);
+          }
         },
         undo: () => {
           set((state) => {
@@ -535,13 +832,29 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
               selectedTextBlockIds,
             };
           });
-          scheduleSave();
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            for (const s of deletedStrokes) {
+              d.strokesPut.set(s.id, s);
+              d.strokesDelete.delete(s.id);
+            }
+            for (const sh of deletedShapes) {
+              d.shapesPut.set(sh.id, sh);
+              d.shapesDelete.delete(sh.id);
+            }
+            for (const tb of deletedTextBlocks) {
+              d.textBlocksPut.set(tb.id, tb);
+              d.textBlocksDelete.delete(tb.id);
+            }
+            scheduleSave(pageId);
+          }
         },
         description: 'Удалить выделенное',
       });
     },
 
-    triggerAutosave: scheduleSave,
+    flushSave,
+    triggerAutosave: () => flushSave(),
   };
 });
 

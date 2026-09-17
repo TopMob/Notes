@@ -51,6 +51,7 @@ export interface ShapeObject {
     dashed?: boolean;
   };
   bounds: AABB;
+  createdAt?: number;
 }
 
 export interface Camera {

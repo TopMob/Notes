@@ -8,6 +8,7 @@ import { drawShapeToCanvas, snapShapeEndPoint, computeShapeBounds } from '../../
 import { simplifyDouglasPeucker } from '../../canvas/stroke/simplify';
 import { erasePointsFromStroke } from '../../canvas/stroke/eraser';
 import { Point, Stroke, ShapeObject, ViewportSize } from '../../types/canvas';
+import { SpatialItem } from '../../canvas/engine/SpatialIndex';
 import { TextBlock } from '../../types/textblock';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
 import { useUiStore } from '../../store/useUiStore';
@@ -187,25 +188,49 @@ export const InfiniteCanvas: React.FC = () => {
 
     Viewport.applyTransform(ctx, camera, viewportSize, dpr);
 
-    // 1. Маркеры (рисуются первыми в режиме multiply)
-    for (const stroke of strokes) {
-      if (stroke.tool === 'highlighter') {
-        drawStrokeToCanvas(ctx, stroke);
+    // 2.1 Frustum Culling: запрашиваем только видимые элементы (+20% буфер)
+    const visibleBounds = Viewport.getVisibleWorldBounds(camera, viewportSize, 0.2);
+    const visibleCandidates = spatialIndex.query(visibleBounds);
+
+    // 2.3 Согласованный Z-порядок:
+    // 1. Маркеры всегда рисуются первыми в режиме multiply
+    // 2. Все остальные элементы (штрихи и фигуры) упорядочиваются по времени создания,
+    //    чтобы надписи ручкой поверх фигур не скрывались под ними
+    const getItemTime = (item: SpatialItem): number => {
+      if ('createdAt' in item && typeof item.createdAt === 'number') {
+        return item.createdAt;
+      }
+      return parseInt(item.id.replace('shape-', ''), 10) || 0;
+    };
+
+    const highlighters: Stroke[] = [];
+    const mainElements: SpatialItem[] = [];
+
+    for (const item of visibleCandidates) {
+      if ('tool' in item && item.tool === 'highlighter') {
+        highlighters.push(item);
+      } else {
+        mainElements.push(item);
       }
     }
 
-    // 2. Обычные перьевые штрихи (все остальные)
-    for (const stroke of strokes) {
-      if (stroke.tool !== 'highlighter') {
-        drawStrokeToCanvas(ctx, stroke);
-      }
+    highlighters.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    mainElements.sort((a, b) => getItemTime(a) - getItemTime(b));
+
+    // Отрисовка маркеров
+    for (const s of highlighters) {
+      drawStrokeToCanvas(ctx, s);
     }
 
-    // 3. Фигуры
-    for (const shape of shapes) {
-      drawShapeToCanvas(ctx, shape);
+    // Отрисовка перьевых штрихов и фигур в правильном Z-порядке
+    for (const item of mainElements) {
+      if ('tool' in item) {
+        drawStrokeToCanvas(ctx, item);
+      } else {
+        drawShapeToCanvas(ctx, item);
+      }
     }
-  }, [camera, viewportSize, dpr, strokes, shapes]);
+  }, [camera, viewportSize, dpr, strokes, shapes, spatialIndex]);
 
   // Запуск перерисовки content-canvas при изменении штрихов/камеры
   useEffect(() => {
@@ -979,14 +1004,16 @@ export const InfiniteCanvas: React.FC = () => {
         ? snapShapeEndPoint(shapeAnchorRef.current, { ...worldPos, pressure: 0.5, t: 0 }, shapeType)
         : { ...worldPos, pressure: 0.5, t: 0 };
 
+      const now = Date.now();
       const newShape: ShapeObject = {
-        id: `shape-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: `shape-${now}-${Math.random().toString(36).slice(2, 6)}`,
         pageId,
         type: shapeType,
         anchor: shapeAnchorRef.current,
         end: endPt,
         style: { color: shapeColor, width: shapeWidth },
         bounds: computeShapeBounds(shapeAnchorRef.current, endPt, shapeWidth),
+        createdAt: now,
       };
 
       const contentCanvas = contentCanvasRef.current;

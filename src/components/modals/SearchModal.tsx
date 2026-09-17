@@ -16,7 +16,7 @@ interface SearchResult {
 
 export const SearchModal: React.FC = () => {
   const { isSearchOpen, setSearchOpen } = useUiStore();
-  const { pages, sections, selectPage } = useNotebookStore();
+  const { navigateToPage } = useNotebookStore();
   const { setCamera } = useCanvasStore();
 
   const [query, setQuery] = useState('');
@@ -46,11 +46,15 @@ export const SearchModal: React.FC = () => {
     const search = async () => {
       setIsSearching(true);
       const db = await getDB();
-      const allTextBlocks = await db.getAll('textBlocks');
+      const [allTextBlocks, allPages, allSections] = await Promise.all([
+        db.getAll('textBlocks'),
+        db.getAll('pages'),
+        db.getAll('sections'),
+      ]);
       const q = query.toLowerCase();
 
-      const pageMap = new Map(pages.map((p) => [p.id, p]));
-      const secMap = new Map(sections.map((s) => [s.id, s]));
+      const pageMap = new Map(allPages.map((p) => [p.id, p]));
+      const secMap = new Map(allSections.map((s) => [s.id, s]));
 
       const matches: SearchResult[] = [];
 
@@ -81,20 +85,17 @@ export const SearchModal: React.FC = () => {
 
     const timer = setTimeout(search, 200);
     return () => clearTimeout(timer);
-  }, [query, pages, sections]);
+  }, [query]);
 
   if (!isSearchOpen) return null;
 
   const handleSelectResult = async (res: SearchResult) => {
-    const targetPage = pages.find((p) => p.id === res.pageId);
-    if (targetPage) {
-      await selectPage(targetPage);
-      setCamera({
-        x: res.x + 100,
-        y: res.y + 50,
-        zoom: 1.0,
-      });
-    }
+    await navigateToPage(res.pageId);
+    setCamera({
+      x: res.x + 100,
+      y: res.y + 50,
+      zoom: 1.0,
+    });
     setSearchOpen(false);
   };
 

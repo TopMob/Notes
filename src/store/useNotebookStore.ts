@@ -11,6 +11,7 @@ import {
   deletePage as dbDeletePage,
   updatePageMetadata,
 } from '../db/storage';
+import { getDB } from '../db/idb';
 import { useCanvasStore } from './useCanvasStore';
 
 interface NotebookState {
@@ -30,6 +31,7 @@ interface NotebookState {
   selectNotebook: (notebook: Notebook) => Promise<void>;
   selectSection: (section: Section) => Promise<void>;
   selectPage: (page: Page) => Promise<void>;
+  navigateToPage: (pageId: string) => Promise<void>;
 
   addSection: (title?: string, color?: string) => Promise<Section>;
   addPage: (title?: string) => Promise<Page>;
@@ -124,6 +126,31 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
   selectPage: async (page) => {
     set({ activePage: page });
+    await useCanvasStore.getState().loadPage(page.id, page.camera, page.background);
+  },
+
+  navigateToPage: async (pageId: string) => {
+    const db = await getDB();
+    const page = await db.get('pages', pageId);
+    if (!page) return;
+
+    const section = await db.get('sections', page.sectionId);
+    if (!section) return;
+
+    const notebook = await db.get('notebooks', section.notebookId);
+    if (!notebook) return;
+
+    const sections = await loadSections(notebook.id);
+    const pages = await loadPages(section.id);
+
+    set({
+      activeNotebook: notebook,
+      sections,
+      activeSection: section,
+      pages,
+      activePage: page,
+    });
+
     await useCanvasStore.getState().loadPage(page.id, page.camera, page.background);
   },
 

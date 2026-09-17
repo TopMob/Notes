@@ -20,120 +20,74 @@ export function aabbContains(container: AABB, child: AABB): boolean {
   );
 }
 
-const MAX_ITEMS = 16;
-const MAX_DEPTH = 8;
+const DEFAULT_CELL_SIZE = 500;
 
-export class QuadTreeNode {
-  bounds: AABB;
-  depth: number;
-  items: SpatialItem[] = [];
-  children: QuadTreeNode[] | null = null;
-
-  constructor(bounds: AABB, depth = 0) {
-    this.bounds = bounds;
-    this.depth = depth;
-  }
-
-  subdivide(): void {
-    const { minX, minY, maxX, maxY } = this.bounds;
-    const midX = (minX + maxX) / 2;
-    const midY = (minY + maxY) / 2;
-
-    this.children = [
-      new QuadTreeNode({ minX, minY, maxX: midX, maxY: midY }, this.depth + 1), // NW
-      new QuadTreeNode({ minX: midX, minY, maxX: maxX, maxY: midY }, this.depth + 1), // NE
-      new QuadTreeNode({ minX, minY: midY, maxX: midX, maxY }, this.depth + 1), // SW
-      new QuadTreeNode({ minX: midX, minY: midY, maxX, maxY }, this.depth + 1), // SE
-    ];
-
-    // Перераспределяем существующие элементы в дочерние узлы
-    const oldItems = this.items;
-    this.items = [];
-
-    for (const item of oldItems) {
-      this.insert(item);
-    }
-  }
-
-  insert(item: SpatialItem): boolean {
-    if (!aabbIntersects(this.bounds, item.bounds)) {
-      return false;
-    }
-
-    if (this.children !== null) {
-      let insertedIntoChild = false;
-      for (const child of this.children) {
-        if (aabbIntersects(child.bounds, item.bounds)) {
-          child.insert(item);
-          insertedIntoChild = true;
-        }
-      }
-      return insertedIntoChild;
-    }
-
-    this.items.push(item);
-
-    if (this.items.length > MAX_ITEMS && this.depth < MAX_DEPTH) {
-      this.subdivide();
-    }
-
-    return true;
-  }
-
-  query(range: AABB, foundMap: Map<string, SpatialItem>): void {
-    if (!aabbIntersects(this.bounds, range)) {
-      return;
-    }
-
-    for (const item of this.items) {
-      if (aabbIntersects(item.bounds, range)) {
-        foundMap.set(item.id, item);
-      }
-    }
-
-    if (this.children !== null) {
-      for (const child of this.children) {
-        child.query(range, foundMap);
-      }
-    }
-  }
-
-  clear(): void {
-    this.items = [];
-    if (this.children !== null) {
-      for (const child of this.children) {
-        child.clear();
-      }
-      this.children = null;
-    }
-  }
-}
-
+/**
+ * Пространственный индекс на основе разреженной равномерной сетки (Spatial Hash Grid).
+ * В отличие от QuadTree с фиксированными границами, не имеет лимитов по координатам (-100k..+100k)
+ * и одинаково эффективно и стабильно работает в любой области бесконечного холста.
+ */
 export class SpatialIndex {
-  private root: QuadTreeNode;
-  private readonly defaultBounds: AABB = {
-    minX: -100000,
-    minY: -100000,
-    maxX: 100000,
-    maxY: 100000,
-  };
+  private cellSize: number;
+  private grid = new Map<string, Set<SpatialItem>>();
+  private items = new Map<string, SpatialItem>();
 
-  constructor() {
-    this.root = new QuadTreeNode(this.defaultBounds);
+  constructor(cellSize = DEFAULT_CELL_SIZE) {
+    this.cellSize = cellSize;
+  }
+
+  private cellKey(cx: number, cy: number): string {
+    return `${cx}:${cy}`;
   }
 
   insert(item: SpatialItem): void {
-    this.root.insert(item);
+    this.items.set(item.id, item);
+    const minCx = Math.floor(item.bounds.minX / this.cellSize);
+    const maxCx = Math.floor(item.bounds.maxX / this.cellSize);
+    const minCy = Math.floor(item.bounds.minY / this.cellSize);
+    const maxCy = Math.floor(item.bounds.maxY / this.cellSize);
+
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        const key = this.cellKey(cx, cy);
+        let cell = this.grid.get(key);
+        if (!cell) {
+          cell = new Set();
+          this.grid.set(key, cell);
+        }
+        cell.add(item);
+      }
+    }
   }
 
   query(range: AABB): SpatialItem[] {
+    const minCx = Math.floor(range.minX / this.cellSize);
+    const maxCx = Math.floor(range.maxX / this.cellSize);
+    const minCy = Math.floor(range.minY / this.cellSize);
+    const maxCy = Math.floor(range.maxY / this.cellSize);
+
     const found = new Map<string, SpatialItem>();
-    this.root.query(range, found);
+
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        const key = this.cellKey(cx, cy);
+        const cell = this.grid.get(key);
+        if (!cell) continue;
+
+        for (const item of cell) {
+          if (!found.has(item.id) && aabbIntersects(item.bounds, range)) {
+            found.set(item.id, item);
+          }
+        }
+      }
+    }
+
     return Array.from(found.values());
   }
 
   clear(): void {
-    this.root.clear();
+    this.grid.clear();
+    this.items.clear();
   }
 
   rebuild(items: SpatialItem[]): void {

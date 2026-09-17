@@ -26,32 +26,52 @@ function getPerpendicularDistance(p: Point, lineStart: Point, lineEnd: Point): n
 }
 
 /**
- * Алгоритм Дугласа-Пекера для сжатия массива точек штриха
- * Сокращает количество точек в 3-6 раз без визуальной потери формы линии
+ * Алгоритм Дугласа-Пекера для сжатия массива точек штриха.
+ * Итеративная реализация с явным стеком: устраняет создание сотен временных массивов slice
+ * и исключает риск переполнения стека вызовов на сверхдлинных штрихах.
  */
 export function simplifyDouglasPeucker(points: Point[], epsilon = 0.8): Point[] {
-  if (points.length <= 2) {
+  const len = points.length;
+  if (len <= 2) {
     return points;
   }
 
-  let maxDistance = 0;
-  let index = 0;
-  const end = points.length - 1;
+  const keep = new Uint8Array(len);
+  keep[0] = 1;
+  keep[len - 1] = 1;
 
-  for (let i = 1; i < end; i++) {
-    const d = getPerpendicularDistance(points[i], points[0], points[end]);
-    if (d > maxDistance) {
-      index = i;
-      maxDistance = d;
+  const stack: [number, number][] = [[0, len - 1]];
+
+  while (stack.length > 0) {
+    const [start, end] = stack.pop()!;
+    if (end <= start + 1) continue;
+
+    let maxDist = 0;
+    let maxIdx = start;
+    const pStart = points[start];
+    const pEnd = points[end];
+
+    for (let i = start + 1; i < end; i++) {
+      const d = getPerpendicularDistance(points[i], pStart, pEnd);
+      if (d > maxDist) {
+        maxDist = d;
+        maxIdx = i;
+      }
+    }
+
+    if (maxDist > epsilon) {
+      keep[maxIdx] = 1;
+      stack.push([start, maxIdx]);
+      stack.push([maxIdx, end]);
     }
   }
 
-  if (maxDistance > epsilon) {
-    const leftRecursive = simplifyDouglasPeucker(points.slice(0, index + 1), epsilon);
-    const rightRecursive = simplifyDouglasPeucker(points.slice(index), epsilon);
-
-    return [...leftRecursive.slice(0, -1), ...rightRecursive];
+  const result: Point[] = [];
+  for (let i = 0; i < len; i++) {
+    if (keep[i] === 1) {
+      result.push(points[i]);
+    }
   }
 
-  return [points[0], points[end]];
+  return result;
 }

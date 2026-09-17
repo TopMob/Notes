@@ -9,13 +9,13 @@ import { getDB } from '../../db/idb';
 
 export const ExportModal: React.FC = () => {
   const { isExportOpen, setExportOpen } = useUiStore();
-  const { strokes, shapes, textBlocks } = useCanvasStore();
+  const { strokes, shapes, textBlocks, background, textBlockHeights } = useCanvasStore();
   const { activePage } = useNotebookStore();
 
   if (!isExportOpen) return null;
 
   // Экспорт страницы в PNG
-  const handleExportPng = () => {
+  const handleExportPng = async () => {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -36,10 +36,11 @@ export const ExportModal: React.FC = () => {
     }
 
     for (const tb of textBlocks) {
+      const h = textBlockHeights[tb.id] || tb.height || 100;
       minX = Math.min(minX, tb.x);
       minY = Math.min(minY, tb.y);
       maxX = Math.max(maxX, tb.x + tb.width);
-      maxY = Math.max(maxY, tb.y + 150);
+      maxY = Math.max(maxY, tb.y + h);
     }
 
     if (minX === Infinity) {
@@ -61,39 +62,136 @@ export const ExportModal: React.FC = () => {
 
     ctx.scale(2, 2);
 
-    // Белый фон
+    // 1. Белый базовый фон
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
 
     // Смещение начала координат
     ctx.translate(padding - minX, padding - minY);
 
-    // Отрисовка маркеров
+    // 2. Отрисовка фонового паттерна (линейка / клетка)
+    if (background === 'ruled') {
+      const lineSpacing = 32;
+      const startY = Math.floor((minY - padding) / lineSpacing) * lineSpacing;
+      const endY = Math.ceil((maxY + padding) / lineSpacing) * lineSpacing;
+
+      ctx.save();
+      ctx.strokeStyle = 'rgba(0, 120, 212, 0.2)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let y = startY; y <= endY; y += lineSpacing) {
+        ctx.moveTo(minX - padding, y);
+        ctx.lineTo(maxX + padding, y);
+      }
+      ctx.stroke();
+
+      // Красная вертикальная линия полей
+      ctx.strokeStyle = 'rgba(216, 59, 1, 0.25)';
+      ctx.beginPath();
+      ctx.moveTo(0, minY - padding);
+      ctx.lineTo(0, maxY + padding);
+      ctx.stroke();
+      ctx.restore();
+    } else if (background === 'grid-small' || background === 'grid-large') {
+      const gridSize = background === 'grid-small' ? 24 : 40;
+      const startX = Math.floor((minX - padding) / gridSize) * gridSize;
+      const endX = Math.ceil((maxX + padding) / gridSize) * gridSize;
+      const startY = Math.floor((minY - padding) / gridSize) * gridSize;
+      const endY = Math.ceil((maxY + padding) / gridSize) * gridSize;
+
+      ctx.save();
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.07)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = startX; x <= endX; x += gridSize) {
+        ctx.moveTo(x, minY - padding);
+        ctx.lineTo(x, maxY + padding);
+      }
+      for (let y = startY; y <= endY; y += gridSize) {
+        ctx.moveTo(minX - padding, y);
+        ctx.lineTo(maxX + padding, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 3. Отрисовка маркеров
     for (const s of strokes) {
       if (s.tool === 'highlighter') drawStrokeToCanvas(ctx, s);
     }
-    // Отрисовка чернил
-    for (const s of strokes) {
-      if (s.tool === 'pen') drawStrokeToCanvas(ctx, s);
-    }
-    // Отрисовка фигур
-    for (const sh of shapes) {
-      drawShapeToCanvas(ctx, sh);
+
+    // 4. Отрисовка перьевых штрихов и фигур в хронологическом порядке
+    type VisualItem = { item: typeof strokes[0] | typeof shapes[0]; time: number; isStroke: boolean };
+    const items: VisualItem[] = [
+      ...strokes.filter((s) => s.tool !== 'highlighter').map((s) => ({ item: s, time: s.createdAt || 0, isStroke: true })),
+      ...shapes.map((sh) => ({ item: sh, time: sh.createdAt || (parseInt(sh.id.replace('shape-', ''), 10) || 0), isStroke: false })),
+    ];
+    items.sort((a, b) => a.time - b.time);
+
+    for (const entry of items) {
+      if (entry.isStroke) {
+        drawStrokeToCanvas(ctx, entry.item as typeof strokes[0]);
+      } else {
+        drawShapeToCanvas(ctx, entry.item as typeof shapes[0]);
+      }
     }
 
-    // Текстовые блоки
-    ctx.font = '16px Inter, sans-serif';
-    ctx.fillStyle = '#201f1e';
+    // 5. Отрисовка текстовых блоков с поддержкой таблиц, KaTeX и стилей через foreignObject
     for (const tb of textBlocks) {
-      const tempDiv = document.createElement('div');
-      tempDiv.innerHTML = tb.contentHTML;
-      const lines = tempDiv.innerText.split('\n');
-      let lineY = tb.y + 20;
-      for (const line of lines) {
-        if (line.trim()) {
-          ctx.fillText(line.trim(), tb.x, lineY);
-          lineY += 24;
-        }
+      const blockWidth = tb.width || 300;
+      const blockHeight = textBlockHeights[tb.id] || tb.height || 120;
+
+      const svgDoc = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="${blockWidth}" height="${blockHeight}">
+          <foreignObject width="100%" height="100%">
+            <div xmlns="http://www.w3.org/1999/xhtml" style="font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 16px; line-height: 1.5; color: #201f1e; word-break: break-word;">
+              <style>
+                .onenote-table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 0.95em; border: 1px solid #edebe9; table-layout: fixed; }
+                .onenote-table th { background: #f3f2f1; font-weight: 600; padding: 6px 10px; border: 1px solid #edebe9; text-align: left; }
+                .onenote-table td { padding: 6px 10px; border: 1px solid #edebe9; }
+                .onenote-callout { margin: 8px 0; padding: 8px 12px; background: rgba(119, 25, 170, 0.06); border-left: 4px solid #7719aa; font-size: 0.95em; border-radius: 0 4px 4px 0; }
+                .katex { font-size: 1.1em; line-height: 1.2; }
+                p { margin: 0 0 6px 0; }
+                ul, ol { margin: 4px 0; padding-left: 20px; }
+              </style>
+              ${tb.contentHTML}
+            </div>
+          </foreignObject>
+        </svg>
+      `;
+
+      try {
+        const img = new window.Image();
+        const svgBlob = new Blob([svgDoc], { type: 'image/svg+xml;charset=utf-8' });
+        const blobUrl = URL.createObjectURL(svgBlob);
+
+        await new Promise<void>((resolve) => {
+          img.onload = () => {
+            ctx.drawImage(img, tb.x, tb.y);
+            URL.revokeObjectURL(blobUrl);
+            resolve();
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(blobUrl);
+            // Запасной вариант при сбое: рендерим текст
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = tb.contentHTML;
+            const lines = tempDiv.innerText.split('\n');
+            let lineY = tb.y + 20;
+            ctx.font = '16px Inter, sans-serif';
+            ctx.fillStyle = '#201f1e';
+            for (const line of lines) {
+              if (line.trim()) {
+                ctx.fillText(line.trim(), tb.x, lineY);
+                lineY += 24;
+              }
+            }
+            resolve();
+          };
+          img.src = blobUrl;
+        });
+      } catch {
+        // ignore
       }
     }
 

@@ -1,6 +1,6 @@
 import { getDB } from './idb';
 import { Notebook, Section, Page } from '../types/notebook';
-import { Stroke, ShapeObject } from '../types/canvas';
+import { Stroke, ShapeObject, Camera, CanvasBackground } from '../types/canvas';
 import { TextBlock } from '../types/textblock';
 import {
   INITIAL_NOTEBOOK,
@@ -72,18 +72,130 @@ export async function loadPageData(pageId: string): Promise<{
   return { strokes, shapes, textBlocks };
 }
 
+export interface PageDiff {
+  strokes?: { put?: Stroke[]; deleteIds?: string[] };
+  shapes?: { put?: ShapeObject[]; deleteIds?: string[] };
+  textBlocks?: { put?: TextBlock[]; deleteIds?: string[] };
+  metadata?: Partial<Pick<Page, 'title' | 'camera' | 'background'>>;
+}
+
+/**
+ * Атомарное сохранение diff-изменений страницы в рамках одной транзакции IndexedDB.
+ * Выполняет точечные put и delete без полного сканирования getAllKeys.
+ */
+export async function savePageDiff(pageId: string, diff: PageDiff): Promise<void> {
+  const db = await getDB();
+  const tx = db.transaction(['pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
+
+  if (diff.strokes) {
+    const store = tx.objectStore('strokes');
+    if (diff.strokes.deleteIds && diff.strokes.deleteIds.length > 0) {
+      for (const id of diff.strokes.deleteIds) {
+        await store.delete(id);
+      }
+    }
+    if (diff.strokes.put && diff.strokes.put.length > 0) {
+      for (const stroke of diff.strokes.put) {
+        await store.put(stroke);
+      }
+    }
+  }
+
+  if (diff.shapes) {
+    const store = tx.objectStore('shapes');
+    if (diff.shapes.deleteIds && diff.shapes.deleteIds.length > 0) {
+      for (const id of diff.shapes.deleteIds) {
+        await store.delete(id);
+      }
+    }
+    if (diff.shapes.put && diff.shapes.put.length > 0) {
+      for (const shape of diff.shapes.put) {
+        await store.put(shape);
+      }
+    }
+  }
+
+  if (diff.textBlocks) {
+    const store = tx.objectStore('textBlocks');
+    if (diff.textBlocks.deleteIds && diff.textBlocks.deleteIds.length > 0) {
+      for (const id of diff.textBlocks.deleteIds) {
+        await store.delete(id);
+      }
+    }
+    if (diff.textBlocks.put && diff.textBlocks.put.length > 0) {
+      for (const block of diff.textBlocks.put) {
+        await store.put(block);
+      }
+    }
+  }
+
+  if (diff.metadata) {
+    const pageStore = tx.objectStore('pages');
+    const page = await pageStore.get(pageId);
+    if (page) {
+      await pageStore.put({ ...page, ...diff.metadata });
+    }
+  }
+
+  await tx.done;
+}
+
+/**
+ * Полное сохранение состояния страницы в одной атомарной транзакции (для миграций / full sync).
+ */
+export async function savePageFull(
+  pageId: string,
+  data: {
+    strokes: Stroke[];
+    shapes: ShapeObject[];
+    textBlocks: TextBlock[];
+    camera?: Camera;
+    background?: CanvasBackground;
+  }
+): Promise<void> {
+  const db = await getDB();
+  const tx = db.transaction(['pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
+
+  const strokeStore = tx.objectStore('strokes');
+  const existingStrokes = await strokeStore.index('by-page').getAllKeys(pageId);
+  for (const k of existingStrokes) await strokeStore.delete(k);
+  for (const s of data.strokes) await strokeStore.put(s);
+
+  const shapeStore = tx.objectStore('shapes');
+  const existingShapes = await shapeStore.index('by-page').getAllKeys(pageId);
+  for (const k of existingShapes) await shapeStore.delete(k);
+  for (const sh of data.shapes) await shapeStore.put(sh);
+
+  const tbStore = tx.objectStore('textBlocks');
+  const existingTb = await tbStore.index('by-page').getAllKeys(pageId);
+  for (const k of existingTb) await tbStore.delete(k);
+  for (const tb of data.textBlocks) await tbStore.put(tb);
+
+  if (data.camera || data.background) {
+    const pageStore = tx.objectStore('pages');
+    const page = await pageStore.get(pageId);
+    if (page) {
+      await pageStore.put({
+        ...page,
+        ...(data.camera ? { camera: data.camera } : {}),
+        ...(data.background ? { background: data.background } : {}),
+      });
+    }
+  }
+
+  await tx.done;
+}
+
 export async function savePageStrokes(pageId: string, strokes: Stroke[]): Promise<void> {
   const db = await getDB();
   const tx = db.transaction('strokes', 'readwrite');
   const store = tx.objectStore('strokes');
 
-  // Удаляем старые штрихи этой страницы
   const existing = await store.index('by-page').getAllKeys(pageId);
   for (const key of existing) {
     await store.delete(key);
   }
 
-  // Записываем обновленные штрихи
   for (const stroke of strokes) {
     await store.put(stroke);
   }
