@@ -278,6 +278,7 @@ export async function deleteSection(sectionId: string): Promise<void> {
   const tx = db.transaction(['sections', 'pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
 
   const pages = await tx.objectStore('pages').index('by-section').getAll(sectionId);
+  const pageIds = pages.map((p) => p.id);
   for (const page of pages) {
     await tx.objectStore('pages').delete(page.id);
     const strokeKeys = await tx.objectStore('strokes').index('by-page').getAllKeys(page.id);
@@ -290,6 +291,11 @@ export async function deleteSection(sectionId: string): Promise<void> {
 
   await tx.objectStore('sections').delete(sectionId);
   await tx.done;
+
+  syncEngine.notifyDelete({
+    sectionIds: [sectionId],
+    pageIds,
+  });
 }
 
 export async function deletePage(pageId: string): Promise<void> {
@@ -305,4 +311,8 @@ export async function deletePage(pageId: string): Promise<void> {
   for (const tbk of tbKeys) await tx.objectStore('textBlocks').delete(tbk);
 
   await tx.done;
+
+  syncEngine.notifyDelete({
+    pageIds: [pageId],
+  });
 }

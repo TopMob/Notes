@@ -47,4 +47,5 @@ export interface ISyncProvider {
     }
   ): Promise<void>;
   pullAll(userId: string, since?: number): Promise<CloudPullResult>;
+  deleteItems(userId: string, item: { sectionIds?: string[]; pageIds?: string[] }): Promise<void>;
 }

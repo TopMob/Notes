@@ -104,6 +104,21 @@ class SyncEngine {
     }, 1500);
   }
 
+  /**
+   * Уведомление об удалении разделов или страниц
+   */
+  public notifyDelete(item: { sectionIds?: string[]; pageIds?: string[] }) {
+    const { userId, providerType } = useSyncStore.getState();
+    if (!userId || providerType === 'local') return;
+
+    const provider = this.getActiveProvider();
+    if (!provider) return;
+
+    provider.deleteItems(userId, item).catch((err) => {
+      console.error('[SyncEngine] Error deleting items in cloud:', err);
+    });
+  }
+
   private async flushPendingChanges() {
     const { userId } = useSyncStore.getState();
     const provider = this.getActiveProvider();
@@ -189,35 +204,49 @@ class SyncEngine {
         }
 
         for (const cSec of cloudData.sections) {
-          await db.put('sections', {
-            id: cSec.id,
-            notebookId: cSec.notebookId,
-            title: cSec.title,
-            color: cSec.color,
-            order: cSec.order,
-          });
+          if (cSec.deletedAt) {
+            await db.delete('sections', cSec.id);
+          } else {
+            await db.put('sections', {
+              id: cSec.id,
+              notebookId: cSec.notebookId,
+              title: cSec.title,
+              color: cSec.color,
+              order: cSec.order,
+            });
+          }
         }
 
         for (const cPg of cloudData.pages) {
-          await db.put('pages', {
-            id: cPg.id,
-            sectionId: cPg.sectionId,
-            title: cPg.title,
-            createdAt: cPg.createdAt,
-            order: cPg.order,
-            camera: cPg.camera,
-            background: cPg.background,
-          });
+          if (cPg.deletedAt) {
+            await db.delete('pages', cPg.id);
+          } else {
+            await db.put('pages', {
+              id: cPg.id,
+              sectionId: cPg.sectionId,
+              title: cPg.title,
+              createdAt: cPg.createdAt,
+              order: cPg.order,
+              camera: cPg.camera,
+              background: cPg.background,
+            });
+          }
         }
 
         // Обновляем элементы страниц
         for (const el of cloudData.elements) {
-          if (el.type === 'stroke') {
-            await db.put('strokes', el.data);
-          } else if (el.type === 'shape') {
-            await db.put('shapes', el.data);
-          } else if (el.type === 'textBlock') {
-            await db.put('textBlocks', el.data);
+          if (el.deletedAt) {
+            if (el.type === 'stroke') await db.delete('strokes', el.id);
+            else if (el.type === 'shape') await db.delete('shapes', el.id);
+            else if (el.type === 'textBlock') await db.delete('textBlocks', el.id);
+          } else {
+            if (el.type === 'stroke') {
+              await db.put('strokes', el.data);
+            } else if (el.type === 'shape') {
+              await db.put('shapes', el.data);
+            } else if (el.type === 'textBlock') {
+              await db.put('textBlocks', el.data);
+            }
           }
         }
 
