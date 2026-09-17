@@ -15,24 +15,10 @@ import {
   Circle,
   ArrowUpRight,
   SplitSquareVertical,
+  Crosshair,
+  CircleDot,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
-
-const PRESET_COLORS = [
-  { name: 'Черный', value: '#201f1e' },
-  { name: 'Синий', value: '#0078d4' },
-  { name: 'Зеленый', value: '#107c41' },
-  { name: 'Красный', value: '#d83b01' },
-  { name: 'Фиолетовый', value: '#7719aa' },
-];
-
-const STROKE_WIDTHS = [
-  { label: 'Тонкая (1px)', value: 1.5 },
-  { label: 'Стандарт (3px)', value: 3 },
-  { label: 'Средняя (5px)', value: 5 },
-  { label: 'Толстая (8px)', value: 8 },
-  { label: 'Маркерная (12px)', value: 12 },
-];
 
 export const RibbonDraw: React.FC = () => {
   const {
@@ -42,6 +28,10 @@ export const RibbonDraw: React.FC = () => {
     setPenColor,
     penWidth,
     setPenWidth,
+    penCursorStyle,
+    setPenCursorStyle,
+    quickColors,
+    updateQuickColor,
     shapeType,
     setShapeType,
     deleteSelectedItems,
@@ -57,11 +47,23 @@ export const RibbonDraw: React.FC = () => {
   const [isEraserMenuOpen, setIsEraserMenuOpen] = useState(false);
   const [isWidthMenuOpen, setIsWidthMenuOpen] = useState(false);
   const [isShapeMenuOpen, setIsShapeMenuOpen] = useState(false);
+  const [editingColorIndex, setEditingColorIndex] = useState<number | null>(null);
 
   const hasSelection =
     selectedStrokeIds.length > 0 ||
     selectedShapeIds.length > 0 ||
     selectedTextBlockIds.length > 0;
+
+  const handleColorClick = (color: string, index: number) => {
+    if (penColor === color) {
+      // Второе нажатие: открываем выбор палитры для замены этого слота
+      setEditingColorIndex(index);
+    } else {
+      setPenColor(color);
+      setEditingColorIndex(null);
+      if (activeTool !== 'pen') setActiveTool('pen');
+    }
+  };
 
   return (
     <div className="ribbon-toolbar">
@@ -101,7 +103,7 @@ export const RibbonDraw: React.FC = () => {
         <button
           className={`tool-btn ${activeTool === 'lasso' ? 'active' : ''}`}
           onClick={() => setActiveTool('lasso')}
-          title="Лассо-выделение контуром"
+          title="Лассо (выделяет штрихи, фигуры и текстовые блоки)"
         >
           <Lasso size={16} />
           <span className="tool-btn-label">Лассо</span>
@@ -120,7 +122,7 @@ export const RibbonDraw: React.FC = () => {
                 setIsEraserMenuOpen(!isEraserMenuOpen);
               }
             }}
-            title="Ластик (кликните для переключения режима)"
+            title="Ластик (ПКМ на холсте также включает быстрый ластик)"
           >
             <Eraser size={16} />
             <span className="tool-btn-label">
@@ -178,27 +180,55 @@ export const RibbonDraw: React.FC = () => {
           />
           <span className="tool-btn-label">Маркер</span>
         </button>
+
+        {/* Переключатель стиля курсора (+ или кружок) */}
+        <button
+          className={`tool-btn icon-only ${penCursorStyle === 'circle' ? 'active' : ''}`}
+          onClick={() => setPenCursorStyle(penCursorStyle === 'circle' ? 'crosshair' : 'circle')}
+          title={`Курсор пера: ${penCursorStyle === 'circle' ? 'Кружок по размеру пера' : 'Перекрестие (+)'} (клик для переключения)`}
+        >
+          {penCursorStyle === 'circle' ? <CircleDot size={16} /> : <Crosshair size={16} />}
+        </button>
       </div>
 
       <div className="toolbar-divider" />
 
-      {/* Быстрая палитра цветов */}
+      {/* Быстрая палитра цветов с возможностью замены любого слота */}
       <div className="toolbar-group color-swatches-group">
-        {PRESET_COLORS.map((c) => (
-          <button
-            key={c.value}
-            className={`color-swatch-btn ${penColor === c.value ? 'selected' : ''}`}
-            style={{ backgroundColor: c.value }}
-            onClick={() => {
-              setPenColor(c.value);
-              if (activeTool !== 'pen') setActiveTool('pen');
-            }}
-            title={c.name}
-          />
+        {quickColors.map((color, idx) => (
+          <div key={idx} className="color-swatch-wrapper" style={{ position: 'relative' }}>
+            <button
+              className={`color-swatch-btn ${penColor === color ? 'selected' : ''}`}
+              style={{ backgroundColor: color }}
+              onClick={() => handleColorClick(color, idx)}
+              title={`Цвет ${color} (кликните повторно, чтобы изменить слот)`}
+            />
+            {editingColorIndex === idx && (
+              <input
+                type="color"
+                value={color}
+                autoFocus
+                onChange={(e) => {
+                  updateQuickColor(idx, e.target.value);
+                  setPenColor(e.target.value);
+                }}
+                onBlur={() => setEditingColorIndex(null)}
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  width: '32px',
+                  height: '32px',
+                  zIndex: 100,
+                  cursor: 'pointer',
+                }}
+              />
+            )}
+          </div>
         ))}
 
         {/* Кастомный color picker */}
-        <label className="color-picker-label" title="Выбрать другой цвет">
+        <label className="color-picker-label" title="Выбрать произвольный цвет">
           <Palette size={16} />
           <input
             type="color"
@@ -214,41 +244,97 @@ export const RibbonDraw: React.FC = () => {
 
       <div className="toolbar-divider" />
 
-      {/* Толщина линии */}
+      {/* Свободный выбор толщины линии: ползунок + поле px */}
       <div className="toolbar-group">
         <div className="dropdown-wrapper">
           <button
             className="tool-btn"
             onClick={() => setIsWidthMenuOpen(!isWidthMenuOpen)}
-            title="Толщина пера"
+            title="Толщина пера (кликните для настройки ползунком)"
           >
-            <Minus size={16} strokeWidth={Math.min(5, Math.max(1.5, penWidth))} />
-            <span className="tool-btn-label">{penWidth}px</span>
+            <Minus size={16} strokeWidth={Math.min(6, Math.max(1.5, penWidth))} />
+            <span className="tool-btn-label">{penWidth} px</span>
             <ChevronDown size={11} className="chevron" />
           </button>
 
           {isWidthMenuOpen && (
-            <div className="dropdown-menu">
-              {STROKE_WIDTHS.map((w) => (
-                <button
-                  key={w.value}
-                  className={`dropdown-item ${penWidth === w.value ? 'active' : ''}`}
-                  onClick={() => {
-                    setPenWidth(w.value);
-                    setIsWidthMenuOpen(false);
-                  }}
-                >
-                  <div
-                    className="width-preview-line"
+            <div className="dropdown-menu width-slider-menu" style={{ minWidth: '220px', padding: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                  Толщина линии:
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={penWidth}
+                    onChange={(e) => setPenWidth(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
                     style={{
-                      height: `${Math.min(8, w.value)}px`,
-                      backgroundColor: penColor,
-                      width: '32px',
+                      width: '46px',
+                      padding: '2px 4px',
+                      border: '1px solid var(--color-border)',
+                      borderRadius: '4px',
+                      fontSize: '12px',
+                      textAlign: 'center',
+                      background: 'var(--color-bg-primary)',
+                      color: 'var(--color-text-primary)',
                     }}
                   />
-                  <span>{w.label}</span>
-                </button>
-              ))}
+                  <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>px</span>
+                </div>
+              </div>
+
+              {/* Ползунок */}
+              <input
+                type="range"
+                min="1"
+                max="40"
+                step="1"
+                value={penWidth}
+                onChange={(e) => setPenWidth(Number(e.target.value))}
+                style={{ width: '100%', cursor: 'pointer', margin: '6px 0 10px 0' }}
+              />
+
+              {/* Превью линии реальной толщины */}
+              <div
+                style={{
+                  height: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'var(--color-bg-secondary)',
+                  borderRadius: '6px',
+                  padding: '0 8px',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    height: `${Math.min(28, penWidth)}px`,
+                    width: '100%',
+                    backgroundColor: penColor,
+                    borderRadius: `${penWidth / 2}px`,
+                  }}
+                />
+              </div>
+
+              {/* Быстрые пресеты */}
+              <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
+                {[1, 3, 5, 8, 16, 24].map((w) => (
+                  <button
+                    key={w}
+                    className={`tool-btn icon-only ${penWidth === w ? 'active' : ''}`}
+                    style={{ flex: 1, height: '24px', fontSize: '11px' }}
+                    onClick={() => {
+                      setPenWidth(w);
+                      setIsWidthMenuOpen(false);
+                    }}
+                  >
+                    {w}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>

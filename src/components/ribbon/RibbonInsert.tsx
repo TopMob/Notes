@@ -1,19 +1,9 @@
 import React, { useState, useRef } from 'react';
 import {
-  FileText,
   Table,
-  Sigma,
   Grid3X3,
-  Calendar,
-  ChevronDown,
-  ListTodo,
-  Lightbulb,
-  Code,
-  Minus,
   Image as ImageIcon,
-  Pi,
-  AlertTriangle,
-  Bookmark,
+  ChevronDown,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
 
@@ -28,6 +18,11 @@ export const RibbonInsert: React.FC = () => {
   } = useCanvasStore();
 
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const [tableHoverGrid, setTableHoverGrid] = useState<{ r: number; c: number }>({ r: 1, c: 1 });
+  const [matrixRows, setMatrixRows] = useState(3);
+  const [matrixCols, setMatrixCols] = useState(3);
+  const [matrixType, setMatrixType] = useState<'pmatrix' | 'bmatrix' | 'vmatrix'>('pmatrix');
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const toggleDropdown = (name: string) => {
@@ -36,9 +31,6 @@ export const RibbonInsert: React.FC = () => {
 
   const closeDropdowns = () => setActiveDropdown(null);
 
-  // Универсальная вставка фрагмента HTML:
-  // Если выделен текстовый блок — вставляет в него (или по позиции курсора).
-  // Если нет — создает аккуратный блок по центру текущего обзора.
   const insertContent = (htmlSnippet: string, defaultWidth = 460) => {
     if (!currentPageId) return;
     closeDropdowns();
@@ -76,7 +68,7 @@ export const RibbonInsert: React.FC = () => {
     }
   };
 
-  // Вставка таблицы OneNote
+  // Вставка таблицы (Word-стиль)
   const insertTable = (rows: number, cols: number) => {
     let html = '<table class="onenote-table"><thead><tr>';
     for (let c = 1; c <= cols; c++) {
@@ -86,159 +78,60 @@ export const RibbonInsert: React.FC = () => {
     for (let r = 1; r <= rows; r++) {
       html += '<tr>';
       for (let c = 1; c <= cols; c++) {
-        html += `<td>Ячейка ${r}.${c}</td>`;
+        html += `<td></td>`;
       }
       html += '</tr>';
     }
     html += '</tbody></table><p></p>';
-    insertContent(html, Math.max(460, cols * 130));
+    insertContent(html, Math.max(460, cols * 120));
   };
 
-  // Вставка формулы KaTeX
-  const insertFormula = (latex: string) => {
+  // Вставка математической матрицы KaTeX
+  const handleInsertMatrix = () => {
+    let body = '';
+    for (let r = 0; r < matrixRows; r++) {
+      const rowVals: string[] = [];
+      for (let c = 0; c < matrixCols; c++) {
+        rowVals.push(r === c ? '1' : '0');
+      }
+      body += rowVals.join(' & ') + (r < matrixRows - 1 ? ' \\\\ ' : '');
+    }
+    const latex = `\\begin{${matrixType}} ${body} \\end{${matrixType}}`;
     const html = `<div class="katex-rendered-block katex-display-block" data-latex="${latex}">$${latex}$</div><p></p>`;
-    insertContent(html, 520);
-  };
-
-  // Пользовательская формула через prompt
-  const handleCustomFormula = () => {
-    closeDropdowns();
-    const latex = prompt(
-      'Введите формулу в формате LaTeX (например: \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a} или \\int_{a}^{b} f(x)dx):',
-      '\\sqrt{a^2 + b^2}'
-    );
-    if (latex && latex.trim()) {
-      insertFormula(latex.trim());
-    }
-  };
-
-  // Вставка даты и времени
-  const insertDateTime = (mode: 'full' | 'date' | 'time') => {
-    const now = new Date();
-    let text = '';
-    if (mode === 'full') {
-      text = now.toLocaleDateString('ru-RU', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    } else if (mode === 'date') {
-      text = now.toLocaleDateString('ru-RU', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-      });
-    } else {
-      text = now.toLocaleTimeString('ru-RU', {
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    }
-    insertContent(`<p><strong>📅 ${text}</strong></p>`);
-  };
-
-  // Вставка списка задач
-  const insertChecklist = () => {
-    const html = `
-      <p><strong>Список задач:</strong></p>
-      <div class="todo-item"><input type="checkbox" /> <span>Задача 1</span></div>
-      <div class="todo-item"><input type="checkbox" /> <span>Задача 2</span></div>
-      <div class="todo-item"><input type="checkbox" /> <span>Задача 3</span></div>
-      <p></p>
-    `;
     insertContent(html, 380);
   };
 
-  // Вставка выноски (Callout)
-  const insertCallout = (type: 'info' | 'warning' | 'success') => {
-    let title = '💡 Заметка / Идея';
-    let text = 'Здесь можно записать важное примечание, вывод или ключевую мысль.';
-    if (type === 'warning') {
-      title = '⚠️ Важно / Внимание';
-      text = 'Обратите внимание на этот пункт при выполнении расчетов или конспектировании.';
-    } else if (type === 'success') {
-      title = '📌 Определение';
-      text = 'Формулировка основного правила, теоремы или математического определения.';
-    }
-
-    const html = `
-      <blockquote class="onenote-callout callout-${type}">
-        <div class="onenote-callout-title">${title}</div>
-        <p>${text}</p>
-      </blockquote>
-      <p></p>
-    `;
-    insertContent(html, 480);
-  };
-
-  // Вставка блока кода
-  const insertCodeBlock = () => {
-    const html = `
-      <pre class="onenote-code-block"><code>// Исходный код программы
-function calculate() {
-  console.log("OneNote Web");
-}</code></pre>
-      <p></p>
-    `;
-    insertContent(html, 480);
-  };
-
-  // Вставка разделителя
-  const insertDivider = () => {
-    insertContent('<hr class="onenote-divider" /><p></p>');
-  };
-
-  // Вставка символа
-  const insertSymbol = (sym: string) => {
-    insertContent(`<span>${sym} </span>`);
-  };
-
-  // Загрузка изображения с диска
-  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Вставка изображения
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      const html = `<p><img src="${dataUrl}" alt="Загруженное изображение" style="max-width: 100%; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); margin: 8px 0;" /></p><p></p>`;
-      insertContent(html, 540);
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl) {
+        insertContent(
+          `<div class="image-wrapper"><img src="${dataUrl}" alt="${file.name}" style="max-width: 100%; border-radius: 6px;" /></div><p></p>`,
+          540
+        );
+      }
     };
     reader.readAsDataURL(file);
     e.target.value = '';
   };
 
-  const mathSymbols = [
-    'π', 'α', 'β', 'γ', 'Δ', 'θ',
-    'λ', 'μ', 'Ω', '∞', '±', '≈',
-    '≠', '≤', '≥', '→', '√', '∂'
-  ];
+  const GRID_ROWS = 8;
+  const GRID_COLS = 8;
 
   return (
     <div className="ribbon-toolbar">
-      {/* 1. Текстовый блок */}
-      <div className="toolbar-group">
-        <button
-          className="tool-btn"
-          onClick={() => insertContent('<p>Введите текст заметки...</p>', 460)}
-          title="Вставить текстовый контейнер на холст"
-        >
-          <FileText size={16} />
-          <span className="tool-btn-label">Текстовый блок</span>
-        </button>
-      </div>
-
-      <div className="toolbar-divider" />
-
-      {/* 2. Таблица */}
+      {/* 1. Таблица с интерактивной сеткой (как в Microsoft Word) */}
       <div className="toolbar-group">
         <div className="dropdown-wrapper">
           <button
             className={`tool-btn ${activeDropdown === 'table' ? 'active' : ''}`}
             onClick={() => toggleDropdown('table')}
-            title="Вставить интерактивную таблицу OneNote"
+            title="Вставить таблицу (выбор размера по сетке)"
           >
             <Table size={16} />
             <span className="tool-btn-label">Таблица</span>
@@ -246,187 +139,62 @@ function calculate() {
           </button>
 
           {activeDropdown === 'table' && (
-            <div className="dropdown-menu">
-              <div className="dropdown-header">Размер таблицы</div>
-              <button className="dropdown-item" onClick={() => insertTable(2, 2)}>
-                <span>Таблица 2 × 2</span>
-              </button>
-              <button className="dropdown-item" onClick={() => insertTable(3, 3)}>
-                <span>Таблица 3 × 3 (стандарт)</span>
-              </button>
-              <button className="dropdown-item" onClick={() => insertTable(4, 4)}>
-                <span>Таблица 4 × 4</span>
-              </button>
-              <button className="dropdown-item" onClick={() => insertTable(2, 5)}>
-                <span>Таблица 2 × 5 (параметры)</span>
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
+            <div
+              className="dropdown-menu word-table-grid-menu"
+              style={{ minWidth: '220px', padding: '12px' }}
+              onMouseLeave={() => setTableHoverGrid({ r: 1, c: 1 })}
+            >
+              <div
+                style={{
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  marginBottom: '8px',
+                  color: 'var(--color-text-secondary)',
+                  textAlign: 'center',
+                }}
+              >
+                Таблица {tableHoverGrid.r} × {tableHoverGrid.c}
+              </div>
 
-      <div className="toolbar-divider" />
-
-      {/* 3. Математика: Формулы KaTeX и Матрицы */}
-      <div className="toolbar-group">
-        {/* Формулы */}
-        <div className="dropdown-wrapper">
-          <button
-            className={`tool-btn ${activeDropdown === 'equation' ? 'active' : ''}`}
-            onClick={() => toggleDropdown('equation')}
-            title="Вставить математическую формулу KaTeX"
-          >
-            <Sigma size={16} />
-            <span className="tool-btn-label">Формула</span>
-            <ChevronDown size={11} className="chevron" />
-          </button>
-
-          {activeDropdown === 'equation' && (
-            <div className="dropdown-menu" style={{ minWidth: 260 }}>
-              <div className="dropdown-header">Пользовательская формула</div>
-              <button className="dropdown-item" onClick={handleCustomFormula}>
-                <span>✍ Ввести формулу (LaTeX)...</span>
-              </button>
-              <div className="dropdown-header">Готовые формулы</div>
-              <button
-                className="dropdown-item"
-                onClick={() => insertFormula('x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}')}
+              {/* Интерактивная матрица квадратиков */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: `repeat(${GRID_COLS}, 18px)`,
+                  gridGap: '3px',
+                  justifyContent: 'center',
+                  padding: '4px',
+                  background: 'var(--color-bg-secondary)',
+                  borderRadius: '6px',
+                }}
               >
-                <span>Квадратное уравнение</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() => insertFormula('X_2 = \\frac{-4}{-4} = 1')}
-              >
-                <span>Дробь: $X_2 = \\frac{-4}{-4} = 1$</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() => insertFormula('\\int_{0}^{\\infty} e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}')}
-              >
-                <span>Интеграл Пуассона</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() => insertFormula('\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1')}
-              >
-                <span>Замечательный предел</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() => insertFormula('\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}')}
-              >
-                <span>Сумма ряда (Базель)</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() => insertFormula('E = mc^2')}
-              >
-                <span>Энергия: $E = mc^2$</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() => insertFormula('a^2 + b^2 = c^2')}
-              >
-                <span>Теорема Пифагора</span>
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Матрицы */}
-        <div className="dropdown-wrapper">
-          <button
-            className={`tool-btn ${activeDropdown === 'matrix' ? 'active' : ''}`}
-            onClick={() => toggleDropdown('matrix')}
-            title="Вставить матрицу или систему линейных уравнений"
-          >
-            <Grid3X3 size={16} />
-            <span className="tool-btn-label">Матрица</span>
-            <ChevronDown size={11} className="chevron" />
-          </button>
-
-          {activeDropdown === 'matrix' && (
-            <div className="dropdown-menu" style={{ minWidth: 260 }}>
-              <div className="dropdown-header">Шаблоны матриц</div>
-              <button
-                className="dropdown-item"
-                onClick={() =>
-                  insertFormula(
-                    '\\begin{pmatrix} a_{11} & a_{12} \\\\ a_{21} & a_{22} \\end{pmatrix}'
-                  )
-                }
-              >
-                <span>Матрица 2 × 2</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() =>
-                  insertFormula(
-                    '\\begin{pmatrix} a_{11} & a_{12} & a_{13} \\\\ a_{21} & a_{22} & a_{23} \\\\ a_{31} & a_{32} & a_{33} \\end{pmatrix}'
-                  )
-                }
-              >
-                <span>Матрица 3 × 3</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() =>
-                  insertFormula(
-                    '\\left(\\begin{array}{ccc|c} 1 & 2 & -1 & 4 \\\\ 2 & -1 & 3 & 9 \\\\ 3 & 1 & -2 & 1 \\end{array}\\right)'
-                  )
-                }
-              >
-                <span>Расширенная матрица (СЛАУ Гаусса)</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() =>
-                  insertFormula('\\begin{pmatrix} x \\\\ y \\\\ z \\end{pmatrix}')
-                }
-              >
-                <span>Вектор-столбец 3 × 1</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() =>
-                  insertFormula(
-                    '\\begin{pmatrix} 1 & 0 & 0 \\\\ 0 & 1 & 0 \\\\ 0 & 0 & 1 \\end{pmatrix}'
-                  )
-                }
-              >
-                <span>Единичная матрица I₃</span>
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Символы */}
-        <div className="dropdown-wrapper">
-          <button
-            className={`tool-btn ${activeDropdown === 'symbols' ? 'active' : ''}`}
-            onClick={() => toggleDropdown('symbols')}
-            title="Вставить научные и математические символы"
-          >
-            <Pi size={16} />
-            <span className="tool-btn-label">Символ</span>
-            <ChevronDown size={11} className="chevron" />
-          </button>
-
-          {activeDropdown === 'symbols' && (
-            <div className="dropdown-menu">
-              <div className="dropdown-header">Символы и операторы</div>
-              <div className="symbol-grid">
-                {mathSymbols.map((sym) => (
-                  <button
-                    key={sym}
-                    className="symbol-btn"
-                    onClick={() => insertSymbol(sym)}
-                    title={`Вставить символ ${sym}`}
-                  >
-                    {sym}
-                  </button>
-                ))}
+                {Array.from({ length: GRID_ROWS }).map((_, rowIdx) =>
+                  Array.from({ length: GRID_COLS }).map((_, colIdx) => {
+                    const r = rowIdx + 1;
+                    const c = colIdx + 1;
+                    const isSelected = r <= tableHoverGrid.r && c <= tableHoverGrid.c;
+                    return (
+                      <div
+                        key={`${r}-${c}`}
+                        onMouseEnter={() => setTableHoverGrid({ r, c })}
+                        onClick={() => insertTable(r, c)}
+                        style={{
+                          width: '18px',
+                          height: '18px',
+                          border: isSelected
+                            ? '1px solid #7719aa'
+                            : '1px solid var(--color-border)',
+                          backgroundColor: isSelected
+                            ? 'rgba(119, 25, 170, 0.25)'
+                            : 'var(--color-bg-primary)',
+                          borderRadius: '2px',
+                          cursor: 'pointer',
+                          transition: 'all 0.1s ease',
+                        }}
+                      />
+                    );
+                  })
+                )}
               </div>
             </div>
           )}
@@ -435,109 +203,94 @@ function calculate() {
 
       <div className="toolbar-divider" />
 
-      {/* 4. Задачи и структуры */}
-      <div className="toolbar-group">
-        <button
-          className="tool-btn"
-          onClick={insertChecklist}
-          title="Вставить список задач с чекбоксами (OneNote To-Do)"
-        >
-          <ListTodo size={16} />
-          <span className="tool-btn-label">Список задач</span>
-        </button>
-
-        {/* Выноски */}
-        <div className="dropdown-wrapper">
-          <button
-            className={`tool-btn ${activeDropdown === 'callout' ? 'active' : ''}`}
-            onClick={() => toggleDropdown('callout')}
-            title="Вставить выноску или акцентную плашку"
-          >
-            <Lightbulb size={16} />
-            <span className="tool-btn-label">Выноска</span>
-            <ChevronDown size={11} className="chevron" />
-          </button>
-
-          {activeDropdown === 'callout' && (
-            <div className="dropdown-menu">
-              <button
-                className="dropdown-item"
-                onClick={() => insertCallout('info')}
-              >
-                <Lightbulb size={14} className="onenote-purple" />
-                <span>💡 Заметка / Идея</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() => insertCallout('warning')}
-              >
-                <AlertTriangle size={14} style={{ color: '#d83b01' }} />
-                <span>⚠️ Важно / Предупреждение</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() => insertCallout('success')}
-              >
-                <Bookmark size={14} style={{ color: '#107c41' }} />
-                <span>📌 Определение / Правило</span>
-              </button>
-            </div>
-          )}
-        </div>
-
-        <button
-          className="tool-btn"
-          onClick={insertCodeBlock}
-          title="Вставить блок исходного кода"
-        >
-          <Code size={16} />
-          <span className="tool-btn-label">Код</span>
-        </button>
-
-        <button
-          className="tool-btn"
-          onClick={insertDivider}
-          title="Вставить горизонтальный разделитель"
-        >
-          <Minus size={16} />
-          <span className="tool-btn-label">Разделитель</span>
-        </button>
-      </div>
-
-      <div className="toolbar-divider" />
-
-      {/* 5. Дата и время */}
+      {/* 2. Матрица KaTeX */}
       <div className="toolbar-group">
         <div className="dropdown-wrapper">
           <button
-            className={`tool-btn ${activeDropdown === 'datetime' ? 'active' : ''}`}
-            onClick={() => toggleDropdown('datetime')}
-            title="Вставить текущую дату и время"
+            className={`tool-btn ${activeDropdown === 'matrix' ? 'active' : ''}`}
+            onClick={() => toggleDropdown('matrix')}
+            title="Вставить математическую матрицу"
           >
-            <Calendar size={16} />
-            <span className="tool-btn-label">Дата и время</span>
+            <Grid3X3 size={16} />
+            <span className="tool-btn-label">Матрица</span>
             <ChevronDown size={11} className="chevron" />
           </button>
 
-          {activeDropdown === 'datetime' && (
-            <div className="dropdown-menu">
+          {activeDropdown === 'matrix' && (
+            <div
+              className="dropdown-menu"
+              style={{ minWidth: '240px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}
+            >
+              <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                Параметры матрицы:
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '12px' }}>Строк:</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="6"
+                  value={matrixRows}
+                  onChange={(e) => setMatrixRows(Math.max(1, Math.min(6, Number(e.target.value) || 1)))}
+                  style={{
+                    width: '50px',
+                    padding: '2px 6px',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: '4px',
+                    textAlign: 'center',
+                    background: 'var(--color-bg-primary)',
+                    color: 'var(--color-text-primary)',
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '12px' }}>Столбцов:</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="6"
+                  value={matrixCols}
+                  onChange={(e) => setMatrixCols(Math.max(1, Math.min(6, Number(e.target.value) || 1)))}
+                  style={{
+                    width: '50px',
+                    padding: '2px 6px',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: '4px',
+                    textAlign: 'center',
+                    background: 'var(--color-bg-primary)',
+                    color: 'var(--color-text-primary)',
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '12px' }}>Тип скобок:</span>
+                <select
+                  value={matrixType}
+                  onChange={(e) => setMatrixType(e.target.value as any)}
+                  style={{
+                    padding: '3px 6px',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: '4px',
+                    fontSize: '12px',
+                    background: 'var(--color-bg-primary)',
+                    color: 'var(--color-text-primary)',
+                  }}
+                >
+                  <option value="pmatrix">( ) круглые</option>
+                  <option value="bmatrix">[ ] квадратные</option>
+                  <option value="vmatrix">| | определитель</option>
+                </select>
+              </div>
+
               <button
-                className="dropdown-item"
-                onClick={() => insertDateTime('full')}
+                className="tool-btn highlight"
+                onClick={handleInsertMatrix}
+                style={{ justifyContent: 'center', marginTop: '4px' }}
               >
-                <span>Дата и время (17 сентября 2026, 18:50)</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() => insertDateTime('date')}
-              >
-                <span>Только дата (17.09.2026)</span>
-              </button>
-              <button
-                className="dropdown-item"
-                onClick={() => insertDateTime('time')}
-              >
-                <span>Только время (18:50)</span>
+                Вставить матрицу {matrixRows}×{matrixCols}
               </button>
             </div>
           )}
@@ -546,19 +299,19 @@ function calculate() {
 
       <div className="toolbar-divider" />
 
-      {/* 6. Изображение */}
+      {/* 3. Изображение */}
       <div className="toolbar-group">
         <input
           ref={fileInputRef}
           type="file"
           accept="image/*"
           style={{ display: 'none' }}
-          onChange={handleImageFileChange}
+          onChange={handleImageUpload}
         />
         <button
           className="tool-btn"
           onClick={() => fileInputRef.current?.click()}
-          title="Вставить изображение с компьютера"
+          title="Вставить картинку"
         >
           <ImageIcon size={16} />
           <span className="tool-btn-label">Рисунок</span>

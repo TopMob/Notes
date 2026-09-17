@@ -6,6 +6,7 @@ import {
   CanvasBackground,
   Stroke,
   ShapeObject,
+  PenCursorStyle,
 } from '../types/canvas';
 import { TextBlock } from '../types/textblock';
 import {
@@ -82,9 +83,25 @@ interface CanvasState {
   updateTextBlock: (id: string, updates: Partial<TextBlock>) => void;
   removeTextBlock: (id: string) => void;
 
+  // Настройки пера и палитры
+  penCursorStyle: PenCursorStyle;
+  setPenCursorStyle: (style: PenCursorStyle) => void;
+  quickColors: string[];
+  setQuickColors: (colors: string[]) => void;
+  updateQuickColor: (index: number, color: string) => void;
+
+  // Измеренная высота текстовых блоков для хитбокса
+  textBlockHeights: Record<string, number>;
+  setTextBlockHeight: (id: string, height: number) => void;
+
   setSelection: (strokeIds: string[], shapeIds: string[], textBlockIds: string[]) => void;
   clearSelection: () => void;
   moveSelectedItems: (dx: number, dy: number) => void;
+  commitMoveItems: (
+    prevStrokes: Stroke[],
+    prevShapes: ShapeObject[],
+    prevTextBlocks: TextBlock[]
+  ) => void;
   deleteSelectedItems: () => void;
 
   triggerAutosave: () => void;
@@ -127,6 +144,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     activeTool: 'pen',
     penColor: '#201f1e',
     penWidth: 3,
+    penCursorStyle: 'crosshair',
+    setPenCursorStyle: (penCursorStyle) => set({ penCursorStyle }),
+    quickColors: ['#201f1e', '#0078d4', '#107c41', '#d83b01', '#7719aa'],
+    setQuickColors: (quickColors) => set({ quickColors }),
+    updateQuickColor: (index, color) =>
+      set((state) => {
+        const next = [...state.quickColors];
+        next[index] = color;
+        return { quickColors: next };
+      }),
+
     highlighterColor: '#fff176', // Soft sunny highlighter yellow
     highlighterWidth: 20,
     shapeType: 'rect',
@@ -140,6 +168,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     strokes: [],
     shapes: [],
     textBlocks: [],
+    textBlockHeights: {},
+    setTextBlockHeight: (id, height) =>
+      set((state) => ({
+        textBlockHeights: { ...state.textBlockHeights, [id]: height },
+      })),
 
     selectedStrokeIds: [],
     selectedShapeIds: [],
@@ -406,6 +439,34 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       });
 
       scheduleSave();
+    },
+
+    commitMoveItems: (prevStrokes, prevShapes, prevTextBlocks) => {
+      const currentStrokes = [...get().strokes];
+      const currentShapes = [...get().shapes];
+      const currentTextBlocks = [...get().textBlocks];
+
+      globalCommandStack.execute({
+        execute: () => {
+          set({
+            strokes: currentStrokes,
+            shapes: currentShapes,
+            textBlocks: currentTextBlocks,
+          });
+          spatialIndex.rebuild([...currentStrokes, ...currentShapes]);
+          scheduleSave();
+        },
+        undo: () => {
+          set({
+            strokes: prevStrokes,
+            shapes: prevShapes,
+            textBlocks: prevTextBlocks,
+          });
+          spatialIndex.rebuild([...prevStrokes, ...prevShapes]);
+          scheduleSave();
+        },
+        description: 'Перемещение объектов',
+      });
     },
 
     deleteSelectedItems: () => {

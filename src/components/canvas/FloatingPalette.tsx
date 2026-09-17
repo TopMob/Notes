@@ -7,9 +7,6 @@ import {
   Lasso,
   GripHorizontal,
   X,
-  FileText,
-  Maximize2,
-  Minimize2,
   Undo2,
   Redo2,
 } from 'lucide-react';
@@ -22,15 +19,13 @@ export const FloatingPalette: React.FC = () => {
     setActiveTool,
     penColor,
     setPenColor,
+    quickColors,
     canUndo,
     canRedo,
     undo,
     redo,
-    camera,
-    currentPageId,
-    addTextBlock,
   } = useCanvasStore();
-  const { isFloatingPaletteOpen, toggleFloatingPalette, isZenMode, toggleZenMode } = useUiStore();
+  const { isFloatingPaletteOpen, toggleFloatingPalette } = useUiStore();
 
   const [position, setPosition] = useState({ x: 340, y: 140 });
   const [isDragging, setIsDragging] = useState(false);
@@ -67,12 +62,11 @@ export const FloatingPalette: React.FC = () => {
     }
   };
 
-  const colors = ['#201f1e', '#0078d4', '#107c41', '#d83b01', '#7719aa'];
-
   return (
     <div
       className="floating-palette"
       style={{ left: `${position.x}px`, top: `${position.y}px` }}
+      title="Мини-панель быстрых инструментов"
     >
       <div
         className="floating-drag-bar"
@@ -81,10 +75,14 @@ export const FloatingPalette: React.FC = () => {
         onPointerUp={handlePointerUp}
       >
         <GripHorizontal size={14} />
+        <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--color-text-muted)', marginLeft: '4px' }}>
+          Быстрые инструменты
+        </span>
         <button
           className="floating-close-btn"
           onClick={toggleFloatingPalette}
-          title="Скрыть мини-палитру"
+          title="Скрыть панель"
+          style={{ marginLeft: 'auto' }}
         >
           <X size={12} />
         </button>
@@ -129,28 +127,7 @@ export const FloatingPalette: React.FC = () => {
           <Lasso size={15} />
         </button>
 
-        <div style={{ width: 1, height: 18, backgroundColor: 'var(--hairline)', margin: '0 2px' }} />
-
-        <button
-          className="floating-tool-btn"
-          onClick={() => {
-            if (!currentPageId) return;
-            const newId = `tb-${Date.now()}`;
-            addTextBlock({
-              id: newId,
-              pageId: currentPageId,
-              x: Math.round(camera.x - 140),
-              y: Math.round(camera.y - 40),
-              width: 380,
-              contentHTML: '<p>Введите текст...</p>',
-              zIndex: 10,
-            });
-            useCanvasStore.getState().setSelection([], [], [newId]);
-          }}
-          title="Вставить текстовый блок"
-        >
-          <FileText size={15} />
-        </button>
+        <div style={{ width: 1, height: 18, backgroundColor: 'var(--hairline)', margin: '0 4px' }} />
 
         <button
           className="floating-tool-btn"
@@ -168,20 +145,12 @@ export const FloatingPalette: React.FC = () => {
         >
           <Redo2 size={15} />
         </button>
-
-        <button
-          className={`floating-tool-btn ${isZenMode ? 'active' : ''}`}
-          onClick={toggleZenMode}
-          title={isZenMode ? 'Выйти из Zen-режима (Esc)' : 'Zen-режим (полный экран)'}
-        >
-          {isZenMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-        </button>
       </div>
 
       <div className="floating-colors-row">
-        {colors.map((c) => (
+        {quickColors.map((c, idx) => (
           <button
-            key={c}
+            key={idx}
             className={`floating-color-dot ${penColor === c ? 'selected' : ''}`}
             style={{ backgroundColor: c }}
             onClick={() => {

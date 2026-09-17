@@ -21,7 +21,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   isActive,
   onSelect,
 }) => {
-  const { updateTextBlock, removeTextBlock } = useCanvasStore();
+  const { updateTextBlock, removeTextBlock, setTextBlockHeight } = useCanvasStore();
   const screenPos = Viewport.worldToScreen({ x: block.x, y: block.y }, camera, viewportSize);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -31,6 +31,41 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   const [isResizing, setIsResizing] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0, blockX: block.x, blockY: block.y });
   const [resizeStart, setResizeStart] = useState({ startX: 0, initialWidth: block.width });
+
+  // Измерение высоты контейнера для идеального хитбокса
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const updateHeight = () => {
+      if (containerRef.current) {
+        const measuredHeight = Math.round(containerRef.current.offsetHeight / (camera.zoom || 1));
+        setTextBlockHeight(block.id, measuredHeight);
+      }
+    };
+    updateHeight();
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+      ro = new ResizeObserver(() => updateHeight());
+      ro.observe(containerRef.current);
+    }
+    return () => {
+      if (ro) ro.disconnect();
+    };
+  }, [block.id, block.contentHTML, block.width, camera.zoom, setTextBlockHeight]);
+
+  // Авто-фокус при создании пустого блока
+  useEffect(() => {
+    if (isActive && contentRef.current && (!block.contentHTML || block.contentHTML === '<p></p>' || block.contentHTML === '<p><br></p>')) {
+      contentRef.current.focus();
+      // Установить курсор в начало
+      const range = document.createRange();
+      const sel = window.getSelection();
+      range.selectNodeContents(contentRef.current);
+      range.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+  }, [isActive, block.contentHTML]);
 
   // Рендер формул KaTeX внутри блока
   useEffect(() => {
@@ -53,8 +88,9 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
     });
   }, [block.contentHTML]);
 
-  // Перетаскивание блока за верхний хендл
+  // Перетаскивание блока за верхний хендл (только ЛКМ)
   const handleDragPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -91,8 +127,9 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
     }
   };
 
-  // Изменение ширины блока (правый ресайз хендл <>)
+  // Изменение ширины блока (правый ресайз хендл <>, только ЛКМ)
   const handleResizePointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -107,7 +144,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   const handleResizePointerMove = (e: React.PointerEvent) => {
     if (!isResizing) return;
     const dx = (e.clientX - resizeStart.startX) / camera.zoom;
-    const newWidth = Math.max(200, Math.round(resizeStart.initialWidth + dx));
+    const newWidth = Math.max(180, Math.round(resizeStart.initialWidth + dx));
 
     updateTextBlock(block.id, { width: newWidth });
   };
@@ -124,9 +161,9 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   };
 
   const handleDoubleClickContent = (e: React.MouseEvent) => {
+    e.stopPropagation();
     const target = (e.target as HTMLElement).closest('.katex-rendered-block') as HTMLElement;
     if (target) {
-      e.stopPropagation();
       const currentLatex = target.getAttribute('data-latex') || '';
       const updatedLatex = prompt('Редактировать формулу KaTeX (LaTeX):', currentLatex);
       if (updatedLatex !== null && updatedLatex.trim()) {
@@ -142,6 +179,25 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         if (contentRef.current) {
           updateTextBlock(block.id, { contentHTML: contentRef.current.innerHTML });
         }
+      }
+    }
+  };
+
+  // Интерактивное переключение чекбоксов To-Do
+  const handleClickContent = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    const checkbox = target.closest('input[type="checkbox"]') as HTMLInputElement | null;
+    if (checkbox) {
+      const isChecked = checkbox.checked;
+      if (isChecked) {
+        checkbox.setAttribute('checked', 'checked');
+        checkbox.closest('.todo-item')?.classList.add('completed');
+      } else {
+        checkbox.removeAttribute('checked');
+        checkbox.closest('.todo-item')?.classList.remove('completed');
+      }
+      if (contentRef.current) {
+        updateTextBlock(block.id, { contentHTML: contentRef.current.innerHTML });
       }
     }
   };
@@ -178,6 +234,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         zIndex: block.zIndex,
       }}
       onClick={onSelect}
+      onDoubleClick={(e) => e.stopPropagation()}
     >
       {/* Верхний серый Drag-Handle (фирменный хендл OneNote) */}
       <div
@@ -217,12 +274,16 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         className="text-block-content"
         contentEditable
         suppressContentEditableWarning
+        data-placeholder="Введите текст..."
+        onClick={handleClickContent}
         onDoubleClick={handleDoubleClickContent}
         onBlur={handleBlur}
+        onKeyDown={(e) => e.stopPropagation()}
         dangerouslySetInnerHTML={{ __html: block.contentHTML }}
         style={{
           fontSize: `${16 * camera.zoom}px`,
           lineHeight: 1.5,
+          cursor: 'text',
         }}
       />
     </div>

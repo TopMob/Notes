@@ -4,6 +4,7 @@ export interface TextBlock {
   x: number;
   y: number;
   width: number;
+  height?: number;
   contentHTML: string;
   zIndex: number;
 }

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Camera, CanvasBackground, ViewportSize } from '../../types/canvas';
 import { Viewport } from '../../canvas/engine/Viewport';
+import { useUiStore } from '../../store/useUiStore';
 
 interface BackgroundLayerProps {
   camera: Camera;
@@ -16,6 +17,7 @@ export const BackgroundLayer: React.FC<BackgroundLayerProps> = ({
   dpr,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const { theme } = useUiStore();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -33,7 +35,7 @@ export const BackgroundLayer: React.FC<BackgroundLayerProps> = ({
     Viewport.applyTransform(ctx, camera, viewportSize, dpr);
 
     const bounds = Viewport.getVisibleWorldBounds(camera, viewportSize, 0.1);
-    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const isDark = theme === 'dark';
 
     if (background === 'ruled') {
       // Тетрадь в линейку
@@ -86,7 +88,7 @@ export const BackgroundLayer: React.FC<BackgroundLayerProps> = ({
       ctx.stroke();
       ctx.restore();
     }
-  }, [camera, background, viewportSize, dpr]);
+  }, [camera, background, viewportSize, dpr, theme]);
 
   return (
     <canvas

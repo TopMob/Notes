@@ -855,6 +855,15 @@
   outline: none;
   font-family: var(--font-sans);
   color: var(--ink);
+  cursor: text;
+  min-height: 28px;
+}
+
+.text-block-content:empty:before {
+  content: attr(data-placeholder);
+  color: var(--ink-muted);
+  pointer-events: none;
+  font-style: normal;
 }
 
 .text-block-content h1 {
@@ -898,6 +907,7 @@
   align-items: center;
   gap: 8px;
   margin: 4px 0;
+  line-height: 1.5;
 }
 
 .todo-item input[type='checkbox'] {
@@ -905,6 +915,13 @@
   accent-color: var(--brand-onenote);
   width: 16px;
   height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.todo-item.completed span {
+  text-decoration: line-through;
+  color: var(--ink-muted);
 }
 
 /* OneNote Таблицы */
@@ -1373,4 +1390,38 @@
   text-align: center;
   font-size: 13px;
   color: var(--ink-muted);
+}
+
+/* =========================================
+   6. ХОЛСТ И СЛОИ (CANVAS LAYERS & CURSORS)
+   ========================================= */
+.canvas-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.infinite-canvas-viewport.tool-pan {
+  cursor: grab;
+}
+
+.infinite-canvas-viewport.tool-cursor {
+  cursor: default;
+}
+
+.infinite-canvas-viewport.tool-lasso {
+  cursor: crosshair;
+}
+
+.infinite-canvas-viewport.cursor-style-crosshair.tool-pen,
+.infinite-canvas-viewport.cursor-style-crosshair.tool-highlighter {
+  cursor: crosshair;
+}
+
+.infinite-canvas-viewport.cursor-style-circle.tool-pen,
+.infinite-canvas-viewport.cursor-style-circle.tool-highlighter,
+.infinite-canvas-viewport.tool-point-eraser,
+.infinite-canvas-viewport.tool-stroke-eraser {
+  cursor: none;
 }

@@ -107,40 +107,53 @@ export const RibbonHome: React.FC = () => {
 
       <div className="toolbar-divider" />
 
-      {/* Стили заголовков */}
+      <div className="toolbar-divider" />
+
+      {/* Выбор размера шрифта */}
       <div className="toolbar-group">
-        <button
-          className="tool-btn"
-          onMouseDown={(e) => {
-            e.preventDefault();
-            applyCommand('formatBlock', '<h1>');
-          }}
-          title="Заголовок 1 (H1)"
-        >
-          <Type size={16} />
-          <span className="tool-btn-label">Заголовок 1</span>
-        </button>
-        <button
-          className="tool-btn"
-          onMouseDown={(e) => {
-            e.preventDefault();
-            applyCommand('formatBlock', '<h2>');
-          }}
-          title="Заголовок 2 (H2)"
-        >
-          <Type size={14} />
-          <span className="tool-btn-label">Заголовок 2</span>
-        </button>
-        <button
-          className="tool-btn"
-          onMouseDown={(e) => {
-            e.preventDefault();
-            applyCommand('formatBlock', '<p>');
-          }}
-          title="Обычный текст"
-        >
-          <span className="tool-btn-label">Текст</span>
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Type size={16} style={{ color: 'var(--color-text-secondary)' }} />
+          <select
+            className="font-size-select"
+            defaultValue="16"
+            onChange={(e) => {
+              const size = e.target.value;
+              const sel = window.getSelection();
+              if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+                const span = document.createElement('span');
+                span.style.fontSize = `${size}px`;
+                const range = sel.getRangeAt(0);
+                span.appendChild(range.extractContents());
+                range.insertNode(span);
+              } else {
+                const activeEl = document.activeElement;
+                if (activeEl && activeEl.closest('.text-block-content')) {
+                  (activeEl.closest('.text-block-content') as HTMLElement).style.fontSize = `${size}px`;
+                }
+              }
+            }}
+            title="Размер шрифта (px)"
+            style={{
+              padding: '4px 6px',
+              borderRadius: '4px',
+              border: '1px solid var(--color-border)',
+              background: 'var(--color-bg-primary)',
+              color: 'var(--color-text-primary)',
+              fontSize: '12px',
+              cursor: 'pointer',
+            }}
+          >
+            <option value="12">12 px</option>
+            <option value="14">14 px</option>
+            <option value="16">16 px (Обычный)</option>
+            <option value="18">18 px</option>
+            <option value="20">20 px</option>
+            <option value="24">24 px (Большой)</option>
+            <option value="28">28 px</option>
+            <option value="32">32 px (Заголовок)</option>
+            <option value="40">40 px</option>
+          </select>
+        </div>
       </div>
 
       <div className="toolbar-divider" />
@@ -168,17 +181,32 @@ export const RibbonHome: React.FC = () => {
           <ListOrdered size={16} />
         </button>
         <button
-          className="tool-btn icon-only"
+          className="tool-btn"
           onMouseDown={(e) => {
             e.preventDefault();
+            const sel = window.getSelection();
+            if (sel && sel.rangeCount > 0) {
+              let node: Node | null = sel.getRangeAt(0).commonAncestorContainer;
+              if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+              const existingTodo = (node as HTMLElement | null)?.closest('.todo-item');
+              if (existingTodo) {
+                // Снимаем To-Do, превращая в обычную строку
+                const p = document.createElement('p');
+                const span = existingTodo.querySelector('span');
+                p.innerHTML = span ? span.innerHTML : existingTodo.innerHTML.replace(/<input[^>]*>/, '');
+                existingTodo.parentNode?.replaceChild(p, existingTodo);
+                return;
+              }
+            }
             applyCommand(
               'insertHTML',
-              '<div class="todo-item"><input type="checkbox" /> <span>Новая задача</span></div>'
+              '<div class="todo-item"><input type="checkbox" contenteditable="false" /><span>Новая задача</span></div>'
             );
           }}
           title="Список дел (To-Do)"
         >
           <CheckSquare size={16} />
+          <span className="tool-btn-label">Дела (To-Do)</span>
         </button>
       </div>
     </div>

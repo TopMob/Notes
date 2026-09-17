@@ -8,6 +8,7 @@ import { drawShapeToCanvas, snapShapeEndPoint, computeShapeBounds } from '../../
 import { simplifyDouglasPeucker } from '../../canvas/stroke/simplify';
 import { erasePointsFromStroke } from '../../canvas/stroke/eraser';
 import { Point, Stroke, ShapeObject, ViewportSize } from '../../types/canvas';
+import { TextBlock } from '../../types/textblock';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
 import { useUiStore } from '../../store/useUiStore';
 
@@ -21,6 +22,7 @@ export const InfiniteCanvas: React.FC = () => {
     activeTool,
     penColor,
     penWidth,
+    penCursorStyle,
     highlighterColor,
     highlighterWidth,
     shapeType,
@@ -33,6 +35,7 @@ export const InfiniteCanvas: React.FC = () => {
     strokes,
     shapes,
     textBlocks,
+    textBlockHeights,
     addStroke,
     deleteStrokes,
     addShape,
@@ -43,6 +46,7 @@ export const InfiniteCanvas: React.FC = () => {
     setSelection,
     clearSelection,
     moveSelectedItems,
+    commitMoveItems,
     addTextBlock,
   } = useCanvasStore();
 
@@ -56,12 +60,18 @@ export const InfiniteCanvas: React.FC = () => {
 
   // Состояние активного рисования
   const isPointerDownRef = useRef(false);
+  const isRightClickEraserRef = useRef(false);
   const strokePointsRef = useRef<Point[]>([]);
   const shapeAnchorRef = useRef<Point | null>(null);
   const lassoPointsRef = useRef<Point[]>([]);
   const panStartRef = useRef<{ clientX: number; clientY: number; camX: number; camY: number } | null>(null);
   const isSpacePressedRef = useRef(false);
   const moveDragStartRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const dragInitialSnapshotRef = useRef<{
+    strokes: Stroke[];
+    shapes: ShapeObject[];
+    textBlocks: TextBlock[];
+  } | null>(null);
   const eraserInitialStrokesRef = useRef<Stroke[] | null>(null);
   const cursorWorldPosRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -234,16 +244,17 @@ export const InfiniteCanvas: React.FC = () => {
     for (const id of selectedTextBlockIds) {
       const tb = tbMap.get(id);
       if (tb) {
+        const h = textBlockHeights[tb.id] || tb.height || 60;
         minX = Math.min(minX, tb.x);
         minY = Math.min(minY, tb.y);
         maxX = Math.max(maxX, tb.x + tb.width);
-        maxY = Math.max(maxY, tb.y + 100);
+        maxY = Math.max(maxY, tb.y + h);
       }
     }
 
     if (minX === Infinity) return null;
     return { minX, minY, maxX, maxY };
-  }, [selectedStrokeIds, selectedShapeIds, selectedTextBlockIds, strokes, shapes, textBlocks]);
+  }, [selectedStrokeIds, selectedShapeIds, selectedTextBlockIds, strokes, shapes, textBlocks, textBlockHeights]);
 
   // Поиск элемента под курсором (для клика)
   const findItemAtPoint = useCallback((worldPos: { x: number; y: number }): Stroke | ShapeObject | null => {
@@ -318,41 +329,88 @@ export const InfiniteCanvas: React.FC = () => {
       }
       ctx.restore();
     }
+
+    // 2. Кружок ластика под курсором (включая ПКМ ластик)
+    if (
+      (activeTool === 'point-eraser' || activeTool === 'stroke-eraser' || isRightClickEraserRef.current) &&
+      cursorWorldPosRef.current
+    ) {
+      const radius = 16 / camera.zoom;
+      ctx.save();
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 1.5 / camera.zoom;
+      ctx.beginPath();
+      ctx.arc(cursorWorldPosRef.current.x, cursorWorldPosRef.current.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 3. Кружок-индикатор пера (если выбран стиль 'circle')
+    if (
+      (activeTool === 'pen' || activeTool === 'highlighter') &&
+      penCursorStyle === 'circle' &&
+      cursorWorldPosRef.current
+    ) {
+      const radius = (activeTool === 'pen' ? penWidth : highlighterWidth) / 2;
+      ctx.save();
+      ctx.strokeStyle = activeTool === 'pen' ? penColor : 'rgba(234, 179, 8, 0.85)';
+      ctx.lineWidth = 1.2 / camera.zoom;
+      ctx.beginPath();
+      ctx.arc(cursorWorldPosRef.current.x, cursorWorldPosRef.current.y, Math.max(2, radius), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
   }, [
     computeSelectionBounds,
     activeTool,
     camera,
     viewportSize,
     dpr,
+    penCursorStyle,
+    penWidth,
+    penColor,
+    highlighterWidth,
   ]);
 
   useEffect(() => {
     renderSelectionAndCursorLayer();
   }, [renderSelectionAndCursorLayer, selectedStrokeIds, selectedShapeIds, selectedTextBlockIds]);
 
-  // Обработка жестов колеса мыши / трекпада (Zoom и Pan)
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
+  // Нативный активный перехват колеса мыши: предотвращает зум всей веб-страницы при Ctrl+Scroll
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
-    if (e.ctrlKey || e.metaKey) {
-      // Zoom относительно курсора
-      const rect = containerRef.current?.getBoundingClientRect();
-      const screenPoint = {
-        x: e.clientX - (rect?.left || 0),
-        y: e.clientY - (rect?.top || 0),
-      };
-      const factor = e.deltaY < 0 ? 1.1 : 0.9;
-      const newCam = Viewport.zoomAtPoint(camera, screenPoint, factor, viewportSize);
-      setCamera(newCam);
-    } else {
-      // Pan холста
-      setCamera((prev) => ({
-        ...prev,
-        x: prev.x + e.deltaX / prev.zoom,
-        y: prev.y + e.deltaY / prev.zoom,
-      }));
-    }
-  };
+    const onWheelNative = (e: WheelEvent) => {
+      e.preventDefault();
+
+      if (e.ctrlKey || e.metaKey) {
+        // Zoom относительно позиции курсора мыши
+        const rect = container.getBoundingClientRect();
+        const screenPoint = {
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top,
+        };
+        const factor = e.deltaY < 0 ? 1.08 : 0.92;
+        useCanvasStore.getState().setCamera((prev) =>
+          Viewport.zoomAtPoint(prev, screenPoint, factor, { w: rect.width, h: rect.height })
+        );
+      } else {
+        // Pan холста
+        const curCam = useCanvasStore.getState().camera;
+        useCanvasStore.getState().setCamera((prev) => ({
+          ...prev,
+          x: prev.x + e.deltaX / curCam.zoom,
+          y: prev.y + e.deltaY / curCam.zoom,
+        }));
+      }
+    };
+
+    container.addEventListener('wheel', onWheelNative, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', onWheelNative);
+    };
+  }, []);
 
   // Поинтер события для рисования
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -362,7 +420,19 @@ export const InfiniteCanvas: React.FC = () => {
     const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     const worldPos = Viewport.screenToWorld(screenPos, camera, viewportSize);
 
-    // 1. Pan режим (Пробел или средняя кнопка мыши)
+    // 0. Зажатие ПКМ (кнопка 2) -> мгновенный точечный ластик!
+    if (e.button === 2) {
+      isPointerDownRef.current = true;
+      isRightClickEraserRef.current = true;
+      eraserInitialStrokesRef.current = [...useCanvasStore.getState().strokes];
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      handleEraserErase(worldPos);
+      cursorWorldPosRef.current = worldPos;
+      renderSelectionAndCursorLayer();
+      return;
+    }
+
+    // 1. Pan режим (Пробел или средняя кнопка мыши / СКМ)
     if (isSpacePressedRef.current || e.button === 1 || activeTool === 'pan') {
       panStartRef.current = {
         clientX: e.clientX,
@@ -374,7 +444,7 @@ export const InfiniteCanvas: React.FC = () => {
       return;
     }
 
-    if (e.button !== 0) return; // Только ЛКМ для рисования
+    if (e.button !== 0) return; // Только ЛКМ для остальных инструментов
 
     // 2. Режим курсора: перемещение выделенного или клик для снятия / выбора
     if (activeTool === 'cursor') {
@@ -395,6 +465,11 @@ export const InfiniteCanvas: React.FC = () => {
 
         if (inside) {
           moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
+          dragInitialSnapshotRef.current = {
+            strokes: [...useCanvasStore.getState().strokes],
+            shapes: [...useCanvasStore.getState().shapes],
+            textBlocks: [...useCanvasStore.getState().textBlocks],
+          };
           (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
           return;
         }
@@ -408,6 +483,11 @@ export const InfiniteCanvas: React.FC = () => {
             setSelection([], [hit.id], []);
           }
           moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
+          dragInitialSnapshotRef.current = {
+            strokes: [...useCanvasStore.getState().strokes],
+            shapes: [...useCanvasStore.getState().shapes],
+            textBlocks: [...useCanvasStore.getState().textBlocks],
+          };
           (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
           return;
         }
@@ -426,6 +506,11 @@ export const InfiniteCanvas: React.FC = () => {
           setSelection([], [hit.id], []);
         }
         moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
+        dragInitialSnapshotRef.current = {
+          strokes: [...useCanvasStore.getState().strokes],
+          shapes: [...useCanvasStore.getState().shapes],
+          textBlocks: [...useCanvasStore.getState().textBlocks],
+        };
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       }
       return;
@@ -593,9 +678,21 @@ export const InfiniteCanvas: React.FC = () => {
     const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     const worldPos = Viewport.screenToWorld(screenPos, camera, viewportSize);
 
-    // Всегда обновляем круг ластика под курсором
-    if (activeTool === 'point-eraser' || activeTool === 'stroke-eraser') {
+    // ПКМ точечный ластик при зажатой правой кнопке мыши
+    if (isRightClickEraserRef.current && isPointerDownRef.current) {
+      handleEraserErase(worldPos);
       cursorWorldPosRef.current = worldPos;
+      renderSelectionAndCursorLayer();
+      return;
+    }
+
+    // Всегда обновляем позицию курсора для индикаторов (ластик, кружок пера)
+    cursorWorldPosRef.current = worldPos;
+    if (
+      activeTool === 'point-eraser' ||
+      activeTool === 'stroke-eraser' ||
+      ((activeTool === 'pen' || activeTool === 'highlighter') && penCursorStyle === 'circle')
+    ) {
       renderSelectionAndCursorLayer();
     }
 
@@ -718,6 +815,51 @@ export const InfiniteCanvas: React.FC = () => {
 
     if (moveDragStartRef.current) {
       moveDragStartRef.current = null;
+      if (dragInitialSnapshotRef.current) {
+        commitMoveItems(
+          dragInitialSnapshotRef.current.strokes,
+          dragInitialSnapshotRef.current.shapes,
+          dragInitialSnapshotRef.current.textBlocks
+        );
+        dragInitialSnapshotRef.current = null;
+      }
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    // Завершение ПКМ ластика
+    if (isRightClickEraserRef.current) {
+      isRightClickEraserRef.current = false;
+      isPointerDownRef.current = false;
+      if (eraserInitialStrokesRef.current) {
+        const prev = eraserInitialStrokesRef.current;
+        const curr = useCanvasStore.getState().strokes;
+        const isDifferent =
+          prev.length !== curr.length ||
+          prev.some((s, idx) => s.id !== curr[idx]?.id || s.points.length !== curr[idx]?.points.length);
+
+        if (isDifferent) {
+          globalCommandStack.execute({
+            execute: () => {
+              useCanvasStore.setState({ strokes: curr });
+              spatialIndex.rebuild([...curr, ...useCanvasStore.getState().shapes]);
+              useCanvasStore.getState().triggerAutosave();
+            },
+            undo: () => {
+              useCanvasStore.setState({ strokes: prev });
+              spatialIndex.rebuild([...prev, ...useCanvasStore.getState().shapes]);
+              useCanvasStore.getState().triggerAutosave();
+            },
+            description: 'Стирание ПКМ-ластиком',
+          });
+        }
+        eraserInitialStrokesRef.current = null;
+      }
+      renderSelectionAndCursorLayer();
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
       } catch {
@@ -862,6 +1004,7 @@ export const InfiniteCanvas: React.FC = () => {
         const candidates = spatialIndex.query(lassoBounds);
         const selectedStrokes: string[] = [];
         const selectedShapes: string[] = [];
+        const selectedTextBlocks: string[] = [];
 
         for (const item of candidates) {
           if ('points' in item) {
@@ -879,8 +1022,18 @@ export const InfiniteCanvas: React.FC = () => {
           }
         }
 
-        if (selectedStrokes.length > 0 || selectedShapes.length > 0) {
-          setSelection(selectedStrokes, selectedShapes, []);
+        // Также захватываем текстовые блоки внутри контура лассо
+        for (const tb of textBlocks) {
+          const h = textBlockHeights[tb.id] || tb.height || 60;
+          const centerX = tb.x + tb.width / 2;
+          const centerY = tb.y + h / 2;
+          if (isPointInPolygon({ x: centerX, y: centerY }, lassoPts)) {
+            selectedTextBlocks.push(tb.id);
+          }
+        }
+
+        if (selectedStrokes.length > 0 || selectedShapes.length > 0 || selectedTextBlocks.length > 0) {
+          setSelection(selectedStrokes, selectedShapes, selectedTextBlocks);
         } else {
           clearSelection();
         }
@@ -915,22 +1068,24 @@ export const InfiniteCanvas: React.FC = () => {
     const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     const worldPos = Viewport.screenToWorld(screenPos, camera, viewportSize);
 
+    const newId = `tb-${Date.now()}`;
     addTextBlock({
-      id: `tb-${Date.now()}`,
+      id: newId,
       pageId: currentPageId || 'page-default',
       x: Math.round(worldPos.x),
       y: Math.round(worldPos.y),
-      width: 420,
-      contentHTML: '<p>Введите текст...</p>',
-      zIndex: 10,
+      width: 400,
+      contentHTML: '',
+      zIndex: 10 + textBlocks.length,
     });
+    setSelection([], [], [newId]);
   };
 
   return (
     <div
       ref={containerRef}
-      className={`infinite-canvas-viewport tool-${activeTool}`}
-      onWheel={handleWheel}
+      className={`infinite-canvas-viewport tool-${activeTool} cursor-style-${penCursorStyle}`}
+      onContextMenu={(e) => e.preventDefault()}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

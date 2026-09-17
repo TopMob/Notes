@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Image, FileJson, Printer, Download, Upload } from 'lucide-react';
+import { X, Image, FileJson, FileText, Download, Upload } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { useNotebookStore } from '../../store/useNotebookStore';
 import { useUiStore } from '../../store/useUiStore';
@@ -105,6 +105,14 @@ export const ExportModal: React.FC = () => {
     setExportOpen(false);
   };
 
+  // Экспорт страницы в PDF (через системный диалог PDF печати)
+  const handleExportPdf = () => {
+    setExportOpen(false);
+    setTimeout(() => {
+      window.print();
+    }, 150);
+  };
+
   // Экспорт всей базы в JSON-бэкап
   const handleExportJson = async () => {
     const db = await getDB();
@@ -176,7 +184,7 @@ export const ExportModal: React.FC = () => {
     <div className="modal-backdrop" onClick={() => setExportOpen(false)}>
       <div className="modal-content export-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h3>Экспорт и управление данными</h3>
+          <h3>Файл / Экспорт данных</h3>
           <button className="modal-close-btn" onClick={() => setExportOpen(false)}>
             <X size={18} />
           </button>
@@ -184,35 +192,50 @@ export const ExportModal: React.FC = () => {
 
         <div className="modal-body">
           <div className="export-options-grid">
+            {/* 1. PNG */}
             <button className="export-card" onClick={handleExportPng}>
               <div className="export-card-icon">
                 <Image size={24} />
               </div>
               <div className="export-card-info">
-                <h4>Снимок в PNG</h4>
-                <p>Экспорт текущей страницы с формулами, текстом и рукописным вводом</p>
+                <h4>Экспорт в PNG</h4>
+                <p>Сохранить текущую страницу как изображение высокой чёткости</p>
               </div>
               <Download size={18} className="card-action-icon" />
             </button>
 
+            {/* 2. PDF */}
+            <button className="export-card" onClick={handleExportPdf}>
+              <div className="export-card-icon">
+                <FileText size={24} />
+              </div>
+              <div className="export-card-info">
+                <h4>Экспорт в PDF</h4>
+                <p>Сохранение страницы в формате PDF для документов и отправки</p>
+              </div>
+              <Download size={18} className="card-action-icon" />
+            </button>
+
+            {/* 3. JSON Бэкап */}
             <button className="export-card" onClick={handleExportJson}>
               <div className="export-card-icon">
                 <FileJson size={24} />
               </div>
               <div className="export-card-info">
                 <h4>Резервная копия (JSON)</h4>
-                <p>Полный бэкап всех блокнотов, разделов, рукописных штрихов и текста</p>
+                <p>Полный бэкап всех блокнотов, разделов, штрихов и заметок</p>
               </div>
               <Download size={18} className="card-action-icon" />
             </button>
 
+            {/* 4. Восстановление из JSON */}
             <label className="export-card import-card">
               <div className="export-card-icon">
                 <Upload size={24} />
               </div>
               <div className="export-card-info">
                 <h4>Восстановить из JSON</h4>
-                <p>Загрузить ранее экспортированную резервную копию</p>
+                <p>Загрузить ранее экспортированную резервную копию блокнотов</p>
               </div>
               <input
                 type="file"
@@ -221,16 +244,6 @@ export const ExportModal: React.FC = () => {
                 className="hidden-file-input"
               />
             </label>
-
-            <button className="export-card" onClick={() => window.print()}>
-              <div className="export-card-icon">
-                <Printer size={24} />
-              </div>
-              <div className="export-card-info">
-                <h4>Печать / PDF</h4>
-                <p>Вывод страницы на печать или сохранение в PDF через браузер</p>
-              </div>
-            </button>
           </div>
         </div>
       </div>

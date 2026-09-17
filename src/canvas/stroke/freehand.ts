@@ -39,17 +39,16 @@ export function drawStrokeToCanvas(ctx: CanvasRenderingContext2D, stroke: Stroke
     return;
   }
 
-  const isHighlighter = stroke.tool === 'highlighter';
   const rawPoints = stroke.points.map((p) => [p.x, p.y, p.pressure]);
 
   try {
     const outlinePoints = getStroke(rawPoints, {
       size: stroke.baseWidth,
-      thinning: isHighlighter ? 0 : 0.5,
-      smoothing: 0.5,
-      streamline: 0.35,
+      thinning: 0,
+      smoothing: 0.6,
+      streamline: 0.4,
       easing: (t) => t,
-      simulatePressure: true,
+      simulatePressure: false,
     });
 
     if (outlinePoints && outlinePoints.length >= 3) {

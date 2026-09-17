@@ -65,3 +65,5 @@ export interface ViewportSize {
   w: number;
   h: number;
 }
+
+export type PenCursorStyle = 'crosshair' | 'circle';
