@@ -2,8 +2,6 @@ import React, { useState } from 'react';
 import {
   Grid,
   Search,
-  Cloud,
-  CloudUpload,
   Moon,
   Sun,
   Maximize2,
@@ -15,12 +13,12 @@ import {
   Settings,
 } from 'lucide-react';
 import { useNotebookStore } from '../../store/useNotebookStore';
-import { useCanvasStore } from '../../store/useCanvasStore';
 import { useUiStore } from '../../store/useUiStore';
+import { SyncStatusBadge } from '../auth/SyncStatusBadge';
+import { AuthControls } from '../auth/AuthControls';
 
 export const Header: React.FC = () => {
   const { notebooks, activeNotebook, selectNotebook } = useNotebookStore();
-  const { saveStatus } = useCanvasStore();
   const {
     theme,
     toggleTheme,
@@ -91,25 +89,10 @@ export const Header: React.FC = () => {
         </div>
       </div>
 
-      {/* Правая группа: Статус сохранения, режим, поделиться, тема, Zen */}
+      {/* Правая группа: Статус синхронизации, режим, поделиться, тема, Zen, настройки, авторизация */}
       <div className="header-right">
-        {/* Индикатор синхронизации */}
-        <div
-          className={`save-indicator ${saveStatus}`}
-          title={saveStatus === 'saved' ? 'Все изменения сохранены в IndexedDB' : 'Сохранение...'}
-        >
-          {saveStatus === 'saved' ? (
-            <>
-              <Cloud size={16} className="save-icon saved" />
-              <span className="save-label">Сохранено</span>
-            </>
-          ) : (
-            <>
-              <CloudUpload size={16} className="save-icon saving" />
-              <span className="save-label">Сохранение…</span>
-            </>
-          )}
-        </div>
+        {/* Индикатор синхронизации с облаком / локально */}
+        <SyncStatusBadge />
 
         {/* Режим: Редактирование */}
         <div className="mode-badge" title="Режим работы">
@@ -156,10 +139,8 @@ export const Header: React.FC = () => {
           <Settings size={16} />
         </button>
 
-        {/* Аватар пользователя */}
-        <div className="user-avatar" title="Учётная запись">
-          <span>TM</span>
-        </div>
+        {/* Авторизация Clerk (Вход / Профиль) */}
+        <AuthControls />
       </div>
     </header>
   );

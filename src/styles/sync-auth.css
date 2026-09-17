@@ -1,0 +1,364 @@
+/* ==========================================================================
+   Стили для модулей авторизации (Clerk) и синхронизации (Turso/Supabase/Local)
+   ========================================================================== */
+
+/* Кнопка входа */
+.auth-signin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background-color: var(--brand-onenote, #7719aa);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--r-md, 6px);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.auth-signin-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.auth-user-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-placeholder {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(120, 120, 120, 0.2);
+  border-top-color: var(--brand-onenote, #7719aa);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* Бейдж статуса синхронизации в шапке */
+.sync-badge-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--hairline, rgba(0, 0, 0, 0.08));
+  border-radius: var(--r-full, 9999px);
+  color: var(--ink, #1f1f1f);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sync-badge-btn:hover {
+  background: var(--bg-active, rgba(0, 0, 0, 0.08));
+  border-color: var(--hairline-strong, rgba(0, 0, 0, 0.16));
+}
+
+.sync-badge-btn .badge-icon.synced {
+  color: #107c41;
+}
+
+.sync-badge-btn .badge-icon.local {
+  color: #0078d4;
+}
+
+.sync-badge-btn .badge-icon.error {
+  color: #d83b01;
+}
+
+.sync-badge-btn .badge-icon.spinning {
+  color: #7719aa;
+  animation: spin 1s linear infinite;
+}
+
+/* Модальное окно синхронизации и хранилища */
+.cloud-modal-content {
+  max-width: 580px;
+  width: 90vw;
+  background: var(--bg-card, #ffffff);
+  border-radius: 12px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--hairline, rgba(0, 0, 0, 0.1));
+}
+
+.modal-title-with-icon {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.modal-header-icon.text-blue {
+  color: #0078d4;
+}
+
+.cloud-user-status-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+  border-radius: 8px;
+  margin-bottom: 20px;
+  border: 1px solid var(--hairline, rgba(0, 0, 0, 0.06));
+}
+
+.user-status-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(0, 120, 212, 0.1);
+  color: #0078d4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.user-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-status-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink, #1f1f1f);
+}
+
+.user-status-sub {
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.text-success {
+  color: #107c41;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.inline-icon {
+  vertical-align: middle;
+}
+
+.cloud-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-secondary, #605e5c);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cloud-providers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.cloud-provider-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1.5px solid var(--hairline, rgba(0, 0, 0, 0.1));
+  background: var(--bg-card, #ffffff);
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.cloud-provider-card:hover {
+  border-color: var(--brand-onenote, #7719aa);
+  background: var(--bg-hover, rgba(0, 0, 0, 0.02));
+}
+
+.cloud-provider-card.selected {
+  border-color: var(--brand-onenote, #7719aa);
+  background: rgba(119, 25, 170, 0.04);
+}
+
+.provider-icon-wrapper {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.provider-icon-wrapper.local {
+  background: rgba(0, 120, 212, 0.1);
+  color: #0078d4;
+}
+
+.provider-icon-wrapper.turso {
+  background: rgba(0, 209, 178, 0.12);
+  color: #00b894;
+}
+
+.provider-icon-wrapper.supabase {
+  background: rgba(62, 207, 142, 0.12);
+  color: #27ae60;
+}
+
+.provider-info {
+  flex: 1;
+}
+
+.provider-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.provider-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink, #1f1f1f);
+}
+
+.badge-recommended {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  background: rgba(0, 184, 148, 0.15);
+  color: #00b894;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.active-pill {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brand-onenote, #7719aa);
+  background: rgba(119, 25, 170, 0.1);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.provider-desc {
+  font-size: 12px;
+  color: var(--ink-secondary, #605e5c);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.cloud-sync-footer {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sync-info-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.sync-info-label {
+  color: var(--ink-secondary, #605e5c);
+}
+
+.sync-status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+}
+
+.sync-status-indicator.synced {
+  color: #107c41;
+}
+
+.sync-status-indicator.syncing {
+  color: #7719aa;
+}
+
+.sync-status-indicator.error {
+  color: #d83b01;
+}
+
+.sync-time {
+  font-size: 11px;
+  color: var(--ink-secondary, #605e5c);
+}
+
+.sync-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(216, 59, 1, 0.1);
+  color: #d83b01;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.sync-success-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(16, 124, 65, 0.1);
+  color: #107c41;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.btn-sync-now {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--brand-onenote, #7719aa);
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-sync-now:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.btn-sync-now:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

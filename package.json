@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@clerk/clerk-react": "^5.61.9",
+    "@libsql/client": "^0.18.0",
+    "@supabase/supabase-js": "^2.116.0",
     "idb": "^8.0.2",
     "katex": "^0.16.21",
     "lucide-react": "^0.475.0",

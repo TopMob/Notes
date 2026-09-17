@@ -1,5 +1,6 @@
 @import './tokens.css';
 @import './reset.css';
+@import './sync-auth.css';
 
 /* Основной лейаут приложения */
 .app-container {

@@ -1,4 +1,5 @@
 import { getDB } from './idb';
+import { syncEngine } from '../services/sync/syncEngine';
 import { Notebook, Section, Page } from '../types/notebook';
 import { Stroke, ShapeObject, Camera, CanvasBackground } from '../types/canvas';
 import { TextBlock } from '../types/textblock';
@@ -138,6 +139,16 @@ export async function savePageDiff(pageId: string, diff: PageDiff): Promise<void
   }
 
   await tx.done;
+
+  syncEngine.notifyChange({
+    pageElements: {
+      pageId,
+      strokes: diff.strokes?.put,
+      shapes: diff.shapes?.put,
+      textBlocks: diff.textBlocks?.put,
+    },
+    pages: diff.metadata ? [{ id: pageId, ...diff.metadata } as any] : undefined,
+  });
 }
 
 /**
@@ -246,17 +257,20 @@ export async function updatePageMetadata(
   if (page) {
     const updated: Page = { ...page, ...updates };
     await db.put('pages', updated);
+    syncEngine.notifyChange({ pages: [updated] });
   }
 }
 
 export async function createSection(section: Section): Promise<void> {
   const db = await getDB();
   await db.put('sections', section);
+  syncEngine.notifyChange({ sections: [section] });
 }
 
 export async function createPage(page: Page): Promise<void> {
   const db = await getDB();
   await db.put('pages', page);
+  syncEngine.notifyChange({ pages: [page] });
 }
 
 export async function deleteSection(sectionId: string): Promise<void> {

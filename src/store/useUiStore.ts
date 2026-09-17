@@ -11,6 +11,7 @@ interface UiState {
   isSearchOpen: boolean;
   isExportOpen: boolean;
   isSettingsOpen: boolean;
+  isCloudSettingsOpen: boolean;
   isFloatingPaletteOpen: boolean;
 
   setTheme: (theme: 'light' | 'dark') => void;
@@ -22,6 +23,7 @@ interface UiState {
   setSearchOpen: (open: boolean) => void;
   setExportOpen: (open: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
+  setCloudSettingsOpen: (open: boolean) => void;
   toggleFloatingPalette: () => void;
 }
 
@@ -34,6 +36,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   isSearchOpen: false,
   isExportOpen: false,
   isSettingsOpen: false,
+  isCloudSettingsOpen: false,
   isFloatingPaletteOpen: false,
 
   setTheme: (theme) => {
@@ -54,5 +57,6 @@ export const useUiStore = create<UiState>((set, get) => ({
   setSearchOpen: (isSearchOpen) => set({ isSearchOpen }),
   setExportOpen: (isExportOpen) => set({ isExportOpen }),
   setSettingsOpen: (isSettingsOpen) => set({ isSettingsOpen }),
+  setCloudSettingsOpen: (isCloudSettingsOpen) => set({ isCloudSettingsOpen }),
   toggleFloatingPalette: () => set((s) => ({ isFloatingPaletteOpen: !s.isFloatingPaletteOpen })),
 }));
