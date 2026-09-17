@@ -902,38 +902,17 @@
   list-style: decimal;
 }
 
-.todo-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 0;
-  line-height: 1.5;
-}
-
-.todo-item input[type='checkbox'] {
-  cursor: pointer;
-  accent-color: var(--brand-onenote);
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  flex-shrink: 0;
-}
-
-.todo-item.completed span {
-  text-decoration: line-through;
-  color: var(--ink-muted);
-}
-
 /* OneNote Таблицы */
 .onenote-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   margin: 10px 0;
   font-size: 0.95em;
   background-color: var(--bg-card);
   border: 1px solid var(--hairline);
   border-radius: var(--r-sm);
-  overflow: hidden;
+  user-select: text;
 }
 
 .onenote-table th {
@@ -943,13 +922,17 @@
   padding: 8px 12px;
   border: 1px solid var(--hairline);
   text-align: left;
+  position: relative;
+  box-sizing: border-box;
 }
 
 .onenote-table td {
   padding: 8px 12px;
   border: 1px solid var(--hairline);
   color: var(--ink);
-  min-width: 60px;
+  min-width: 40px;
+  position: relative;
+  box-sizing: border-box;
 }
 
 .onenote-table tr:hover td {
@@ -1390,6 +1373,122 @@
   text-align: center;
   font-size: 13px;
   color: var(--ink-muted);
+}
+
+/* Модалка настроек */
+.settings-modal {
+  max-width: 580px;
+  max-height: 85vh;
+}
+
+.settings-modal-body {
+  overflow-y: auto;
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.settings-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+
+.settings-section-desc {
+  font-size: 12px;
+  color: var(--ink-secondary);
+  margin-bottom: var(--sp-3);
+}
+
+.settings-cards-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.settings-option-card {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 10px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background-color: var(--bg-card);
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  position: relative;
+  width: 100%;
+}
+
+.settings-option-card:hover {
+  border-color: var(--brand-onenote);
+  background-color: var(--bg-hover);
+}
+
+.settings-option-card.active {
+  border-color: var(--brand-onenote);
+  background-color: var(--brand-onenote-light);
+}
+
+.settings-option-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-sm);
+  background-color: var(--bg-hover);
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.settings-option-card.active .settings-option-icon {
+  background-color: var(--brand-onenote);
+  color: #ffffff;
+}
+
+.settings-option-info {
+  flex: 1;
+}
+
+.settings-option-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-tag-recommended {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  background-color: var(--brand-onenote);
+  color: #ffffff;
+  border-radius: 10px;
+}
+
+.settings-option-sub {
+  font-size: 11px;
+  color: var(--ink-secondary);
+  margin-top: 1px;
+}
+
+.settings-check-badge {
+  color: var(--brand-onenote);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-divider {
+  height: 1px;
+  background-color: var(--hairline);
+  margin: 4px 0;
 }
 
 /* =========================================

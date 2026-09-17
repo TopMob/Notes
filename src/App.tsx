@@ -9,6 +9,7 @@ import { InfiniteCanvas } from './components/canvas/InfiniteCanvas';
 import { FloatingPalette } from './components/canvas/FloatingPalette';
 import { SearchModal } from './components/modals/SearchModal';
 import { ExportModal } from './components/modals/ExportModal';
+import { SettingsModal } from './components/modals/SettingsModal';
 import './styles/app.css';
 
 export const App: React.FC = () => {
@@ -65,6 +66,7 @@ export const App: React.FC = () => {
       <FloatingPalette />
       <SearchModal />
       <ExportModal />
+      <SettingsModal />
 
       {/* Кнопка выхода из Zen-режима (всегда видна в полноэкранном режиме) */}
       {isZenMode && (

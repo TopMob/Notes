@@ -80,9 +80,13 @@ export const FloatingPalette: React.FC = () => {
         </span>
         <button
           className="floating-close-btn"
-          onClick={toggleFloatingPalette}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleFloatingPalette();
+          }}
           title="Скрыть панель"
-          style={{ marginLeft: 'auto' }}
+          style={{ marginLeft: 'auto', cursor: 'pointer' }}
         >
           <X size={12} />
         </button>

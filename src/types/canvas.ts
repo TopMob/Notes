@@ -67,3 +67,5 @@ export interface ViewportSize {
 }
 
 export type PenCursorStyle = 'crosshair' | 'circle';
+
+export type RightClickAction = 'point-eraser' | 'stroke-eraser' | 'pan' | 'none';

@@ -12,6 +12,7 @@ import {
   ChevronDown,
   Edit3,
   BookOpen,
+  Settings,
 } from 'lucide-react';
 import { useNotebookStore } from '../../store/useNotebookStore';
 import { useCanvasStore } from '../../store/useCanvasStore';
@@ -27,6 +28,7 @@ export const Header: React.FC = () => {
     toggleZenMode,
     setSearchOpen,
     setExportOpen,
+    setSettingsOpen,
   } = useUiStore();
 
   const [isNotebookMenuOpen, setIsNotebookMenuOpen] = useState(false);
@@ -143,6 +145,15 @@ export const Header: React.FC = () => {
           title={isZenMode ? 'Выйти из Zen-режима' : 'Zen-режим (во весь экран)'}
         >
           {isZenMode ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+        </button>
+
+        {/* Настройки */}
+        <button
+          className="header-icon-btn"
+          onClick={() => setSettingsOpen(true)}
+          title="Параметры и настройки"
+        >
+          <Settings size={16} />
         </button>
 
         {/* Аватар пользователя */}

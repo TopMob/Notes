@@ -6,11 +6,8 @@ import {
   Grid,
   AlignJustify,
   File,
-  Moon,
-  Sun,
-  Maximize2,
-  Minimize2,
   Sliders,
+  Settings,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { useUiStore } from '../../store/useUiStore';
@@ -19,12 +16,9 @@ import { CanvasBackground } from '../../types/canvas';
 export const RibbonView: React.FC = () => {
   const { camera, setCamera, background, setBackground } = useCanvasStore();
   const {
-    theme,
-    toggleTheme,
-    isZenMode,
-    toggleZenMode,
     isFloatingPaletteOpen,
     toggleFloatingPalette,
+    setSettingsOpen,
   } = useUiStore();
 
   const handleZoomIn = () => {
@@ -134,20 +128,11 @@ export const RibbonView: React.FC = () => {
 
         <button
           className="tool-btn"
-          onClick={toggleTheme}
-          title="Переключить тему оформления"
+          onClick={() => setSettingsOpen(true)}
+          title="Параметры и настройки приложения"
         >
-          {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
-          <span className="tool-btn-label">{theme === 'light' ? 'Тёмная' : 'Светлая'}</span>
-        </button>
-
-        <button
-          className={`tool-btn ${isZenMode ? 'active' : ''}`}
-          onClick={toggleZenMode}
-          title="Полноэкранный режим без панелей"
-        >
-          {isZenMode ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-          <span className="tool-btn-label">Zen-режим</span>
+          <Settings size={16} />
+          <span className="tool-btn-label">Настройки</span>
         </button>
       </div>
     </div>

@@ -23,6 +23,7 @@ export const InfiniteCanvas: React.FC = () => {
     penColor,
     penWidth,
     penCursorStyle,
+    rightClickAction,
     highlighterColor,
     highlighterWidth,
     shapeType,
@@ -301,36 +302,76 @@ export const InfiniteCanvas: React.FC = () => {
 
     Viewport.applyTransform(ctx, camera, viewportSize, dpr);
 
-    // 1. Рамка выделения
-    const bounds = computeSelectionBounds();
-    if (bounds) {
-      const { minX, minY, maxX, maxY } = bounds;
-      const pad = 8;
+    // 1. Выделение линий (подсветка самой линии непосредственно вдоль штриха)
+    if (selectedStrokeIds.length > 0) {
+      const allStrokes = useCanvasStore.getState().strokes;
       ctx.save();
-      ctx.strokeStyle = '#7719aa';
-      ctx.lineWidth = 1.5 / camera.zoom;
-      ctx.setLineDash([5 / camera.zoom, 5 / camera.zoom]);
-      ctx.strokeRect(minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2);
+      for (const id of selectedStrokeIds) {
+        const stroke = allStrokes.find((s) => s.id === id);
+        if (!stroke || stroke.points.length < 2) continue;
 
-      // Ручки по углам
-      const handleSize = 7 / camera.zoom;
-      ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = '#7719aa';
-      ctx.setLineDash([]);
-      const corners = [
-        [minX - pad, minY - pad],
-        [maxX + pad, minY - pad],
-        [minX - pad, maxY + pad],
-        [maxX + pad, maxY + pad],
-      ];
-      for (const [cx, cy] of corners) {
-        ctx.fillRect(cx - handleSize / 2, cy - handleSize / 2, handleSize, handleSize);
-        ctx.strokeRect(cx - handleSize / 2, cy - handleSize / 2, handleSize, handleSize);
+        // Внешнее акцентное свечение вдоль штриха
+        ctx.strokeStyle = 'rgba(119, 25, 170, 0.45)';
+        ctx.lineWidth = stroke.baseWidth + 8 / camera.zoom;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        for (let i = 0; i < stroke.points.length; i++) {
+          const pt = stroke.points[i];
+          if (i === 0) ctx.moveTo(pt.x, pt.y);
+          else ctx.lineTo(pt.x, pt.y);
+        }
+        ctx.stroke();
+
+        // Внутренний аккуратный пунктирный контур
+        ctx.strokeStyle = '#7719aa';
+        ctx.lineWidth = Math.max(1.2 / camera.zoom, 1);
+        ctx.setLineDash([4 / camera.zoom, 4 / camera.zoom]);
+        ctx.beginPath();
+        for (let i = 0; i < stroke.points.length; i++) {
+          const pt = stroke.points[i];
+          if (i === 0) ctx.moveTo(pt.x, pt.y);
+          else ctx.lineTo(pt.x, pt.y);
+        }
+        ctx.stroke();
       }
       ctx.restore();
     }
 
-    // 2. Кружок ластика под курсором (включая ПКМ ластик)
+    // 2. Рамка выделения (для фигур или смешанных элементов, не захламляя одиночные линии)
+    const hasNonStrokeSelection = selectedShapeIds.length > 0 || selectedTextBlockIds.length > 0;
+    if (hasNonStrokeSelection) {
+      const bounds = computeSelectionBounds();
+      if (bounds) {
+        const { minX, minY, maxX, maxY } = bounds;
+        const pad = 8;
+        ctx.save();
+        ctx.strokeStyle = '#7719aa';
+        ctx.lineWidth = 1.5 / camera.zoom;
+        ctx.setLineDash([5 / camera.zoom, 5 / camera.zoom]);
+        ctx.strokeRect(minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2);
+
+        // Ручки по углам
+        const handleSize = 7 / camera.zoom;
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = '#7719aa';
+        ctx.setLineDash([]);
+        const corners = [
+          [minX - pad, minY - pad],
+          [maxX + pad, minY - pad],
+          [minX - pad, maxY + pad],
+          [maxX + pad, maxY + pad],
+        ];
+        for (const [cx, cy] of corners) {
+          ctx.fillRect(cx - handleSize / 2, cy - handleSize / 2, handleSize, handleSize);
+          ctx.strokeRect(cx - handleSize / 2, cy - handleSize / 2, handleSize, handleSize);
+        }
+        ctx.restore();
+      }
+    }
+
+    // 3. Кружок ластика под курсором (включая ПКМ ластик)
     if (
       (activeTool === 'point-eraser' || activeTool === 'stroke-eraser' || isRightClickEraserRef.current) &&
       cursorWorldPosRef.current
@@ -345,7 +386,7 @@ export const InfiniteCanvas: React.FC = () => {
       ctx.restore();
     }
 
-    // 3. Кружок-индикатор пера (если выбран стиль 'circle')
+    // 4. Кружок/точка-индикатор пера (если выбран стиль 'circle')
     if (
       (activeTool === 'pen' || activeTool === 'highlighter') &&
       penCursorStyle === 'circle' &&
@@ -354,10 +395,15 @@ export const InfiniteCanvas: React.FC = () => {
       const radius = (activeTool === 'pen' ? penWidth : highlighterWidth) / 2;
       ctx.save();
       ctx.strokeStyle = activeTool === 'pen' ? penColor : 'rgba(234, 179, 8, 0.85)';
+      ctx.fillStyle = activeTool === 'pen' ? penColor : 'rgba(234, 179, 8, 0.85)';
       ctx.lineWidth = 1.2 / camera.zoom;
       ctx.beginPath();
-      ctx.arc(cursorWorldPosRef.current.x, cursorWorldPosRef.current.y, Math.max(2, radius), 0, Math.PI * 2);
+      ctx.arc(cursorWorldPosRef.current.x, cursorWorldPosRef.current.y, Math.max(3, radius), 0, Math.PI * 2);
       ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(cursorWorldPosRef.current.x, cursorWorldPosRef.current.y, 1.2 / camera.zoom, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
     }
   }, [
@@ -367,6 +413,9 @@ export const InfiniteCanvas: React.FC = () => {
     viewportSize,
     dpr,
     penCursorStyle,
+    selectedStrokeIds,
+    selectedShapeIds,
+    selectedTextBlockIds,
     penWidth,
     penColor,
     highlighterWidth,
@@ -414,21 +463,39 @@ export const InfiniteCanvas: React.FC = () => {
 
   // Поинтер события для рисования
   const handlePointerDown = (e: React.PointerEvent) => {
+    // Если клик внутри контейнера текста - отдаем управление contentEditable для выделения текста и ввода!
+    if ((e.target as HTMLElement)?.closest('.text-block-container')) {
+      return;
+    }
+
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
     const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     const worldPos = Viewport.screenToWorld(screenPos, camera, viewportSize);
 
-    // 0. Зажатие ПКМ (кнопка 2) -> мгновенный точечный ластик!
+    // 0. Зажатие ПКМ (кнопка 2)
     if (e.button === 2) {
-      isPointerDownRef.current = true;
-      isRightClickEraserRef.current = true;
-      eraserInitialStrokesRef.current = [...useCanvasStore.getState().strokes];
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-      handleEraserErase(worldPos);
-      cursorWorldPosRef.current = worldPos;
-      renderSelectionAndCursorLayer();
+      if (rightClickAction === 'pan') {
+        panStartRef.current = {
+          clientX: e.clientX,
+          clientY: e.clientY,
+          camX: camera.x,
+          camY: camera.y,
+        };
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        return;
+      }
+      if (rightClickAction === 'point-eraser' || rightClickAction === 'stroke-eraser') {
+        isPointerDownRef.current = true;
+        isRightClickEraserRef.current = true;
+        eraserInitialStrokesRef.current = [...useCanvasStore.getState().strokes];
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        handleEraserErase(worldPos);
+        cursorWorldPosRef.current = worldPos;
+        renderSelectionAndCursorLayer();
+        return;
+      }
       return;
     }
 
@@ -446,65 +513,26 @@ export const InfiniteCanvas: React.FC = () => {
 
     if (e.button !== 0) return; // Только ЛКМ для остальных инструментов
 
-    // 2. Режим курсора: перемещение выделенного или клик для снятия / выбора
+    // 2. Режим курсора: выбор объектов и перемещение уже выделенных
     if (activeTool === 'cursor') {
-      const hasSelection =
-        selectedStrokeIds.length > 0 ||
-        selectedShapeIds.length > 0 ||
-        selectedTextBlockIds.length > 0;
-
-      if (hasSelection) {
-        const bounds = computeSelectionBounds();
-        const pad = 12 / camera.zoom;
-        const inside =
-          bounds &&
-          worldPos.x >= bounds.minX - pad &&
-          worldPos.x <= bounds.maxX + pad &&
-          worldPos.y >= bounds.minY - pad &&
-          worldPos.y <= bounds.maxY + pad;
-
-        if (inside) {
-          moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
-          dragInitialSnapshotRef.current = {
-            strokes: [...useCanvasStore.getState().strokes],
-            shapes: [...useCanvasStore.getState().shapes],
-            textBlocks: [...useCanvasStore.getState().textBlocks],
-          };
-          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-          return;
-        }
-
-        // Кликнули мимо рамки выделения: проверяем, не кликнули ли на другой объект
-        const hit = findItemAtPoint(worldPos);
-        if (hit) {
-          if ('points' in hit) {
-            setSelection([hit.id], [], []);
-          } else if ('type' in hit) {
-            setSelection([], [hit.id], []);
-          }
-          moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
-          dragInitialSnapshotRef.current = {
-            strokes: [...useCanvasStore.getState().strokes],
-            shapes: [...useCanvasStore.getState().shapes],
-            textBlocks: [...useCanvasStore.getState().textBlocks],
-          };
-          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-          return;
-        }
-
-        // Клик в пустое место: СНИМАЕМ ВЫДЕЛЕНИЕ!
-        clearSelection();
-        return;
-      }
-
-      // Если ничего не выделено: проверяем клик по объекту
       const hit = findItemAtPoint(worldPos);
-      if (hit) {
-        if ('points' in hit) {
-          setSelection([hit.id], [], []);
-        } else if ('type' in hit) {
-          setSelection([], [hit.id], []);
-        }
+
+      // Проверяем, нажат ли уже ранее выделенный объект
+      const isHitAlreadySelected = hit && (
+        ('points' in hit && selectedStrokeIds.includes(hit.id)) ||
+        ('type' in hit && selectedShapeIds.includes(hit.id))
+      );
+
+      const bounds = computeSelectionBounds();
+      const pad = 10 / camera.zoom;
+      const isInsideSelection = bounds &&
+        worldPos.x >= bounds.minX - pad &&
+        worldPos.x <= bounds.maxX + pad &&
+        worldPos.y >= bounds.minY - pad &&
+        worldPos.y <= bounds.maxY + pad;
+
+      // Начинаем перетаскивание ТОЛЬКО если объект УЖЕ выделен или кликнули внутри рамки выделения
+      if (isHitAlreadySelected || (isInsideSelection && (selectedStrokeIds.length > 0 || selectedShapeIds.length > 0))) {
         moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
         dragInitialSnapshotRef.current = {
           strokes: [...useCanvasStore.getState().strokes],
@@ -512,7 +540,21 @@ export const InfiniteCanvas: React.FC = () => {
           textBlocks: [...useCanvasStore.getState().textBlocks],
         };
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        return;
       }
+
+      // Если кликнули на невыделенный объект -> сначала просто ВЫДЕЛЯЕМ его (без случайного сдвига на первом клике!)
+      if (hit) {
+        if ('points' in hit) {
+          setSelection([hit.id], [], []);
+        } else if ('type' in hit) {
+          setSelection([], [hit.id], []);
+        }
+        return;
+      }
+
+      // Клик в пустое место -> снимаем выделение
+      clearSelection();
       return;
     }
 
@@ -612,7 +654,11 @@ export const InfiniteCanvas: React.FC = () => {
 
     const candidates = spatialIndex.query(searchRange);
 
-    if (activeTool === 'point-eraser') {
+    const isPointMode = isRightClickEraserRef.current
+      ? (rightClickAction === 'point-eraser')
+      : (activeTool === 'point-eraser');
+
+    if (isPointMode) {
       const strokesToReplace = new Map<string, Stroke[]>();
       let modified = false;
 

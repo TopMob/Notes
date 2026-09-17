@@ -7,6 +7,7 @@ import {
   Stroke,
   ShapeObject,
   PenCursorStyle,
+  RightClickAction,
 } from '../types/canvas';
 import { TextBlock } from '../types/textblock';
 import {
@@ -86,6 +87,8 @@ interface CanvasState {
   // Настройки пера и палитры
   penCursorStyle: PenCursorStyle;
   setPenCursorStyle: (style: PenCursorStyle) => void;
+  rightClickAction: RightClickAction;
+  setRightClickAction: (action: RightClickAction) => void;
   quickColors: string[];
   setQuickColors: (colors: string[]) => void;
   updateQuickColor: (index: number, color: string) => void;
@@ -144,8 +147,24 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     activeTool: 'pen',
     penColor: '#201f1e',
     penWidth: 3,
-    penCursorStyle: 'crosshair',
-    setPenCursorStyle: (penCursorStyle) => set({ penCursorStyle }),
+    penCursorStyle: (localStorage.getItem('notes_cursor_style') as PenCursorStyle) || 'crosshair',
+    setPenCursorStyle: (penCursorStyle) => {
+      try {
+        localStorage.setItem('notes_cursor_style', penCursorStyle);
+      } catch {
+        // ignore
+      }
+      set({ penCursorStyle });
+    },
+    rightClickAction: (localStorage.getItem('notes_right_click_action') as RightClickAction) || 'point-eraser',
+    setRightClickAction: (rightClickAction) => {
+      try {
+        localStorage.setItem('notes_right_click_action', rightClickAction);
+      } catch {
+        // ignore
+      }
+      set({ rightClickAction });
+    },
     quickColors: ['#201f1e', '#0078d4', '#107c41', '#d83b01', '#7719aa'],
     setQuickColors: (quickColors) => set({ quickColors }),
     updateQuickColor: (index, color) =>

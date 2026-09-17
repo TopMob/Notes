@@ -7,7 +7,6 @@ import {
   Underline,
   List,
   ListOrdered,
-  CheckSquare,
   Type,
   Plus,
 } from 'lucide-react';
@@ -179,34 +178,6 @@ export const RibbonHome: React.FC = () => {
           title="Нумерованный список"
         >
           <ListOrdered size={16} />
-        </button>
-        <button
-          className="tool-btn"
-          onMouseDown={(e) => {
-            e.preventDefault();
-            const sel = window.getSelection();
-            if (sel && sel.rangeCount > 0) {
-              let node: Node | null = sel.getRangeAt(0).commonAncestorContainer;
-              if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
-              const existingTodo = (node as HTMLElement | null)?.closest('.todo-item');
-              if (existingTodo) {
-                // Снимаем To-Do, превращая в обычную строку
-                const p = document.createElement('p');
-                const span = existingTodo.querySelector('span');
-                p.innerHTML = span ? span.innerHTML : existingTodo.innerHTML.replace(/<input[^>]*>/, '');
-                existingTodo.parentNode?.replaceChild(p, existingTodo);
-                return;
-              }
-            }
-            applyCommand(
-              'insertHTML',
-              '<div class="todo-item"><input type="checkbox" contenteditable="false" /><span>Новая задача</span></div>'
-            );
-          }}
-          title="Список дел (To-Do)"
-        >
-          <CheckSquare size={16} />
-          <span className="tool-btn-label">Дела (To-Do)</span>
         </button>
       </div>
     </div>

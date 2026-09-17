@@ -183,19 +183,99 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
     }
   };
 
-  // Интерактивное переключение чекбоксов To-Do
-  const handleClickContent = (e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    const checkbox = target.closest('input[type="checkbox"]') as HTMLInputElement | null;
-    if (checkbox) {
-      const isChecked = checkbox.checked;
-      if (isChecked) {
-        checkbox.setAttribute('checked', 'checked');
-        checkbox.closest('.todo-item')?.classList.add('completed');
-      } else {
-        checkbox.removeAttribute('checked');
-        checkbox.closest('.todo-item')?.classList.remove('completed');
+  // Интерактивное изменение ширины столбцов и высоты строк таблиц OneNote
+  const tableResizeRef = useRef<{
+    cell: HTMLTableCellElement;
+    type: 'col' | 'row';
+    startX: number;
+    startY: number;
+    initialWidth: number;
+    initialHeight: number;
+  } | null>(null);
+
+  const handleContentPointerMove = (e: React.PointerEvent) => {
+    // 1. Активный ресайз столбца или строки
+    if (tableResizeRef.current) {
+      const { cell, type, startX, startY, initialWidth, initialHeight } = tableResizeRef.current;
+      if (type === 'col') {
+        const dx = (e.clientX - startX) / camera.zoom;
+        const newWidth = Math.max(35, Math.round(initialWidth + dx));
+        const table = cell.closest('table');
+        const colIdx = cell.cellIndex;
+        if (table) {
+          table.style.tableLayout = 'fixed';
+          for (let r = 0; r < table.rows.length; r++) {
+            const c = table.rows[r].cells[colIdx];
+            if (c) c.style.width = `${newWidth}px`;
+          }
+        } else {
+          cell.style.width = `${newWidth}px`;
+        }
+      } else if (type === 'row') {
+        const dy = (e.clientY - startY) / camera.zoom;
+        const newHeight = Math.max(24, Math.round(initialHeight + dy));
+        const tr = cell.parentElement as HTMLTableRowElement | null;
+        if (tr) {
+          tr.style.height = `${newHeight}px`;
+          for (let i = 0; i < tr.cells.length; i++) {
+            tr.cells[i].style.height = `${newHeight}px`;
+          }
+        }
       }
+      return;
+    }
+
+    // 2. Индикация границы ячейки (col-resize или row-resize)
+    const target = e.target as HTMLElement | null;
+    const cell = target?.closest('th, td') as HTMLTableCellElement | null;
+    if (cell && cell.closest('.onenote-table')) {
+      const rect = cell.getBoundingClientRect();
+      const isRightBorder = Math.abs(e.clientX - rect.right) <= 6;
+      const isBottomBorder = Math.abs(e.clientY - rect.bottom) <= 6;
+
+      if (isRightBorder) {
+        cell.style.cursor = 'col-resize';
+      } else if (isBottomBorder) {
+        cell.style.cursor = 'row-resize';
+      } else {
+        cell.style.cursor = 'text';
+      }
+    }
+  };
+
+  const handleContentPointerDown = (e: React.PointerEvent) => {
+    const target = e.target as HTMLElement | null;
+    const cell = target?.closest('th, td') as HTMLTableCellElement | null;
+    if (cell && cell.closest('.onenote-table') && e.button === 0) {
+      const rect = cell.getBoundingClientRect();
+      const isRightBorder = Math.abs(e.clientX - rect.right) <= 6;
+      const isBottomBorder = Math.abs(e.clientY - rect.bottom) <= 6;
+
+      if (isRightBorder || isBottomBorder) {
+        e.preventDefault();
+        e.stopPropagation();
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+
+        tableResizeRef.current = {
+          cell,
+          type: isRightBorder ? 'col' : 'row',
+          startX: e.clientX,
+          startY: e.clientY,
+          initialWidth: cell.offsetWidth,
+          initialHeight: (cell.parentElement as HTMLTableRowElement)?.offsetHeight || cell.offsetHeight,
+        };
+      }
+    }
+  };
+
+  const handleContentPointerUp = (e: React.PointerEvent) => {
+    if (tableResizeRef.current) {
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      tableResizeRef.current = null;
       if (contentRef.current) {
         updateTextBlock(block.id, { contentHTML: contentRef.current.innerHTML });
       }
@@ -275,7 +355,9 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         contentEditable
         suppressContentEditableWarning
         data-placeholder="Введите текст..."
-        onClick={handleClickContent}
+        onPointerDown={handleContentPointerDown}
+        onPointerMove={handleContentPointerMove}
+        onPointerUp={handleContentPointerUp}
         onDoubleClick={handleDoubleClickContent}
         onBlur={handleBlur}
         onKeyDown={(e) => e.stopPropagation()}

@@ -10,6 +10,7 @@ interface UiState {
   isZenMode: boolean;
   isSearchOpen: boolean;
   isExportOpen: boolean;
+  isSettingsOpen: boolean;
   isFloatingPaletteOpen: boolean;
 
   setTheme: (theme: 'light' | 'dark') => void;
@@ -20,6 +21,7 @@ interface UiState {
   toggleZenMode: () => void;
   setSearchOpen: (open: boolean) => void;
   setExportOpen: (open: boolean) => void;
+  setSettingsOpen: (open: boolean) => void;
   toggleFloatingPalette: () => void;
 }
 
@@ -31,6 +33,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   isZenMode: false,
   isSearchOpen: false,
   isExportOpen: false,
+  isSettingsOpen: false,
   isFloatingPaletteOpen: false,
 
   setTheme: (theme) => {
@@ -50,5 +53,6 @@ export const useUiStore = create<UiState>((set, get) => ({
   toggleZenMode: () => set((s) => ({ isZenMode: !s.isZenMode })),
   setSearchOpen: (isSearchOpen) => set({ isSearchOpen }),
   setExportOpen: (isExportOpen) => set({ isExportOpen }),
+  setSettingsOpen: (isSettingsOpen) => set({ isSettingsOpen }),
   toggleFloatingPalette: () => set((s) => ({ isFloatingPaletteOpen: !s.isFloatingPaletteOpen })),
 }));
