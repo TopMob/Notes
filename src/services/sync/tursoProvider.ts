@@ -3,6 +3,7 @@ import { ISyncProvider, CloudPullResult } from './types';
 import { Notebook, Section, Page } from '../../types/notebook';
 import { Stroke, ShapeObject } from '../../types/canvas';
 import { TextBlock } from '../../types/textblock';
+import { compressJson, decompressJson } from './compression';
 
 export class TursoProvider implements ISyncProvider {
   name: 'turso' = 'turso';
@@ -131,6 +132,7 @@ export class TursoProvider implements ISyncProvider {
 
     if (elements.strokes) {
       for (const stroke of elements.strokes) {
+        const compressed = await compressJson(stroke);
         statements.push({
           sql: `
             INSERT INTO page_elements (id, user_id, page_id, type, data, updated_at, deleted_at)
@@ -140,13 +142,14 @@ export class TursoProvider implements ISyncProvider {
               updated_at = excluded.updated_at,
               deleted_at = NULL;
           `,
-          args: [stroke.id, userId, pageId, JSON.stringify(stroke), now],
+          args: [stroke.id, userId, pageId, compressed, now],
         });
       }
     }
 
     if (elements.shapes) {
       for (const shape of elements.shapes) {
+        const compressed = await compressJson(shape);
         statements.push({
           sql: `
             INSERT INTO page_elements (id, user_id, page_id, type, data, updated_at, deleted_at)
@@ -156,13 +159,14 @@ export class TursoProvider implements ISyncProvider {
               updated_at = excluded.updated_at,
               deleted_at = NULL;
           `,
-          args: [shape.id, userId, pageId, JSON.stringify(shape), now],
+          args: [shape.id, userId, pageId, compressed, now],
         });
       }
     }
 
     if (elements.textBlocks) {
       for (const block of elements.textBlocks) {
+        const compressed = await compressJson(block);
         statements.push({
           sql: `
             INSERT INTO page_elements (id, user_id, page_id, type, data, updated_at, deleted_at)
@@ -172,7 +176,7 @@ export class TursoProvider implements ISyncProvider {
               updated_at = excluded.updated_at,
               deleted_at = NULL;
           `,
-          args: [block.id, userId, pageId, JSON.stringify(block), now],
+          args: [block.id, userId, pageId, compressed, now],
         });
       }
     }
@@ -233,14 +237,16 @@ export class TursoProvider implements ISyncProvider {
         background: r.background ? JSON.parse(r.background) : { type: 'grid', color: '#ffffff' },
         deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
       })),
-      elements: elRes.rows.map((r: any) => ({
-        id: String(r.id),
-        pageId: String(r.page_id),
-        type: r.type as 'stroke' | 'shape' | 'textBlock',
-        data: typeof r.data === 'string' ? JSON.parse(r.data) : r.data,
-        updatedAt: Number(r.updated_at),
-        deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
-      })),
+      elements: await Promise.all(
+        elRes.rows.map(async (r: any) => ({
+          id: String(r.id),
+          pageId: String(r.page_id),
+          type: r.type as 'stroke' | 'shape' | 'textBlock',
+          data: await decompressJson(r.data),
+          updatedAt: Number(r.updated_at),
+          deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
+        }))
+      ),
     };
   }
 

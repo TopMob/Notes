@@ -48,12 +48,27 @@ export const useSyncStore = create<SyncStoreState>((set) => ({
 class SyncEngine {
   private tursoProvider: TursoProvider;
   private supabaseProvider: SupabaseProvider;
-  private debounceTimer: any = null;
+  private idleTimer: any = null;
+  private maxWaitTimer: any = null;
+  private readonly IDLE_DELAY = 15000; // 15 секунд бездействия
+  private readonly MAX_WAIT = 60000;   // 1 минута непрерывной работы
   private pendingPayload: SyncPayload = {};
 
   constructor() {
     this.tursoProvider = new TursoProvider();
     this.supabaseProvider = new SupabaseProvider();
+
+    // При закрытии или сворачивании вкладки гарантированно отправляем накопившиеся данные
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', () => {
+        this.flushPendingChanges();
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          this.flushPendingChanges();
+        }
+      });
+    }
   }
 
   private getActiveProvider(): ISyncProvider | null {
@@ -66,7 +81,9 @@ class SyncEngine {
   /**
    * Уведомление о локальном изменении данных.
    * Если пользователь залогинен и выбран облачный провайдер,
-   * изменение ставится в очередь и отправляется с дебаунсом 1.5 сек.
+   * изменение ставится в очередь и отправляется:
+   * - либо через 15 сек бездействия (idle),
+   * - либо максимум через 60 сек активной непрерывной работы (maxWait).
    */
   public notifyChange(payload: SyncPayload) {
     const { userId, providerType } = useSyncStore.getState();
@@ -100,15 +117,20 @@ class SyncEngine {
       };
     }
 
-    useSyncStore.getState().setStatus('syncing');
-
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer);
+    // Перезапуск таймера бездействия (15 секунд тишины после последнего действия)
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
     }
-
-    this.debounceTimer = setTimeout(() => {
+    this.idleTimer = setTimeout(() => {
       this.flushPendingChanges();
-    }, 1500);
+    }, this.IDLE_DELAY);
+
+    // Таймер максимального ожидания (не более 60 секунд задержки при непрерывной работе)
+    if (!this.maxWaitTimer) {
+      this.maxWaitTimer = setTimeout(() => {
+        this.flushPendingChanges();
+      }, this.MAX_WAIT);
+    }
   }
 
   /**
@@ -127,12 +149,33 @@ class SyncEngine {
   }
 
   private async flushPendingChanges() {
+    // Сбрасываем оба таймера
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    if (this.maxWaitTimer) {
+      clearTimeout(this.maxWaitTimer);
+      this.maxWaitTimer = null;
+    }
+
     const { userId } = useSyncStore.getState();
     const provider = this.getActiveProvider();
     if (!userId || !provider) return;
 
+    // Проверяем, есть ли накопленные данные
+    const hasData =
+      (this.pendingPayload.notebooks && this.pendingPayload.notebooks.length > 0) ||
+      (this.pendingPayload.sections && this.pendingPayload.sections.length > 0) ||
+      (this.pendingPayload.pages && this.pendingPayload.pages.length > 0) ||
+      (this.pendingPayload.pageElements && this.pendingPayload.pageElements.pageId);
+
+    if (!hasData) return;
+
     const payload = { ...this.pendingPayload };
     this.pendingPayload = {};
+
+    useSyncStore.getState().setStatus('syncing');
 
     try {
       if (payload.notebooks && payload.notebooks.length > 0) {

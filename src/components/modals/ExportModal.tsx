@@ -211,7 +211,7 @@ export const ExportModal: React.FC = () => {
     }, 150);
   };
 
-  // Экспорт всей базы в JSON-бэкап
+  // Экспорт всей базы в сжатый JSON-бэкап (Gzip .json.gz)
   const handleExportJson = async () => {
     const db = await getDB();
     const data = {
@@ -224,58 +224,73 @@ export const ExportModal: React.FC = () => {
       exportDate: new Date().toISOString(),
     };
 
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const jsonString = JSON.stringify(data);
+    let blob: Blob;
+    let fileName = `onenote_backup_${new Date().toISOString().slice(0, 10)}.json.gz`;
+
+    if (typeof CompressionStream !== 'undefined') {
+      const stream = new Blob([jsonString]).stream().pipeThrough(new CompressionStream('gzip'));
+      blob = await new Response(stream).blob();
+    } else {
+      blob = new Blob([jsonString], { type: 'application/json' });
+      fileName = `onenote_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    }
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `onenote_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = fileName;
     a.click();
     URL.revokeObjectURL(url);
     setExportOpen(false);
   };
 
-  // Импорт из JSON-бэкапа
-  const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Импорт из JSON / JSON.GZ бэкапа
+  const handleImportJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      try {
-        const json = JSON.parse(ev.target?.result as string);
-        const db = await getDB();
-        const tx = db.transaction(
-          ['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'],
-          'readwrite'
-        );
-
-        if (Array.isArray(json.notebooks)) {
-          for (const nb of json.notebooks) await tx.objectStore('notebooks').put(nb);
-        }
-        if (Array.isArray(json.sections)) {
-          for (const sec of json.sections) await tx.objectStore('sections').put(sec);
-        }
-        if (Array.isArray(json.pages)) {
-          for (const pg of json.pages) await tx.objectStore('pages').put(pg);
-        }
-        if (Array.isArray(json.strokes)) {
-          for (const st of json.strokes) await tx.objectStore('strokes').put(st);
-        }
-        if (Array.isArray(json.shapes)) {
-          for (const sh of json.shapes) await tx.objectStore('shapes').put(sh);
-        }
-        if (Array.isArray(json.textBlocks)) {
-          for (const tb of json.textBlocks) await tx.objectStore('textBlocks').put(tb);
-        }
-
-        await tx.done;
-        alert('Данные успешно импортированы! Страница будет перезагружена.');
-        window.location.reload();
-      } catch (err) {
-        alert('Ошибка при чтении файла бэкапа: ' + (err as Error).message);
+    try {
+      let jsonStr = '';
+      if (file.name.endsWith('.gz') || file.type.includes('gzip')) {
+        const stream = file.stream().pipeThrough(new DecompressionStream('gzip'));
+        jsonStr = await new Response(stream).text();
+      } else {
+        jsonStr = await file.text();
       }
-    };
-    reader.readAsText(file);
+
+      const json = JSON.parse(jsonStr);
+      const db = await getDB();
+      const tx = db.transaction(
+        ['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'],
+        'readwrite'
+      );
+
+      if (Array.isArray(json.notebooks)) {
+        for (const nb of json.notebooks) await tx.objectStore('notebooks').put(nb);
+      }
+      if (Array.isArray(json.sections)) {
+        for (const sec of json.sections) await tx.objectStore('sections').put(sec);
+      }
+      if (Array.isArray(json.pages)) {
+        for (const pg of json.pages) await tx.objectStore('pages').put(pg);
+      }
+      if (Array.isArray(json.strokes)) {
+        for (const st of json.strokes) await tx.objectStore('strokes').put(st);
+      }
+      if (Array.isArray(json.shapes)) {
+        for (const sh of json.shapes) await tx.objectStore('shapes').put(sh);
+      }
+      if (Array.isArray(json.textBlocks)) {
+        for (const tb of json.textBlocks) await tx.objectStore('textBlocks').put(tb);
+      }
+
+      await tx.done;
+      alert('Данные успешно импортированы! Страница будет перезагружена.');
+      window.location.reload();
+    } catch (err) {
+      alert('Ошибка при чтении файла бэкапа: ' + (err as Error).message);
+    }
   };
 
   return (
@@ -337,7 +352,7 @@ export const ExportModal: React.FC = () => {
               </div>
               <input
                 type="file"
-                accept=".json"
+                accept=".json,.gz,.json.gz,application/json,application/gzip"
                 onChange={handleImportJson}
                 className="hidden-file-input"
               />

@@ -3,6 +3,8 @@ import { ISyncProvider, CloudPullResult } from './types';
 import { Notebook, Section, Page } from '../../types/notebook';
 import { Stroke, ShapeObject } from '../../types/canvas';
 import { TextBlock } from '../../types/textblock';
+import { compressJson, decompressJson } from './compression';
+
 function deduplicateById<T extends { id: string }>(items: T[]): T[] {
   const map = new Map<string, T>();
   for (const item of items) {
@@ -145,7 +147,7 @@ export class SupabaseProvider implements ISyncProvider {
           user_id: userId,
           page_id: pageId,
           type: 'stroke',
-          data: s,
+          data: await compressJson(s),
           updated_at: now,
           deleted_at: null,
         });
@@ -159,7 +161,7 @@ export class SupabaseProvider implements ISyncProvider {
           user_id: userId,
           page_id: pageId,
           type: 'shape',
-          data: sh,
+          data: await compressJson(sh),
           updated_at: now,
           deleted_at: null,
         });
@@ -173,7 +175,7 @@ export class SupabaseProvider implements ISyncProvider {
           user_id: userId,
           page_id: pageId,
           type: 'textBlock',
-          data: tb,
+          data: await compressJson(tb),
           updated_at: now,
           deleted_at: null,
         });
@@ -231,14 +233,16 @@ export class SupabaseProvider implements ISyncProvider {
         background: r.background || { type: 'grid', color: '#ffffff' },
         deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
       })),
-      elements: (elRes.data || []).map((r: any) => ({
-        id: r.id,
-        pageId: r.page_id,
-        type: r.type,
-        data: r.data,
-        updatedAt: Number(r.updated_at),
-        deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
-      })),
+      elements: await Promise.all(
+        (elRes.data || []).map(async (r: any) => ({
+          id: r.id,
+          pageId: r.page_id,
+          type: r.type,
+          data: await decompressJson(r.data),
+          updatedAt: Number(r.updated_at),
+          deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
+        }))
+      ),
     };
   }
 
