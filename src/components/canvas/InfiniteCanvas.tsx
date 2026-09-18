@@ -481,11 +481,82 @@ export const InfiniteCanvas: React.FC = () => {
       }
     };
 
+    const onMouseDownNative = (e: MouseEvent) => {
+      const isChord =
+        (e.button === 0 && (e.buttons & 2) !== 0) || // ЛКМ при зажатой ПКМ
+        (e.button === 2 && (e.buttons & 1) !== 0) || // ПКМ при зажатой ЛКМ
+        ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0);
+
+      if (isChord) {
+        triggerMouseChordUndo(e);
+      }
+    };
+
+    container.addEventListener('mousedown', onMouseDownNative, { capture: true });
     container.addEventListener('wheel', onWheelNative, { passive: false });
     return () => {
+      container.removeEventListener('mousedown', onMouseDownNative, { capture: true });
       container.removeEventListener('wheel', onWheelNative);
     };
   }, []);
+
+  const triggerMouseChordUndo = (e: React.MouseEvent | MouseEvent | React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Сбрасываем Pointer Capture
+    if (containerRef.current) {
+      try {
+        if (containerRef.current.hasPointerCapture?.(1)) {
+          containerRef.current.releasePointerCapture(1);
+        }
+      } catch {}
+    }
+
+    strokePointsRef.current = [];
+    shapeAnchorRef.current = null;
+    lassoPointsRef.current = [];
+    const activeCanvas = activeCanvasRef.current;
+    if (activeCanvas) {
+      const ctx = activeCanvas.getContext('2d');
+      if (ctx) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
+      }
+    }
+
+    if (isRightClickEraserRef.current && eraserInitialStrokesRef.current) {
+      useCanvasStore.setState({ strokes: eraserInitialStrokesRef.current });
+      eraserInitialStrokesRef.current = null;
+    }
+    if (dragInitialSnapshotRef.current) {
+      useCanvasStore.setState({
+        strokes: dragInitialSnapshotRef.current.strokes,
+        shapes: dragInitialSnapshotRef.current.shapes,
+        textBlocks: dragInitialSnapshotRef.current.textBlocks,
+      });
+      dragInitialSnapshotRef.current = null;
+    }
+
+    panStartRef.current = null;
+    moveDragStartRef.current = null;
+    isPointerDownRef.current = false;
+    isRightClickEraserRef.current = false;
+
+    useCanvasStore.getState().undo();
+    renderSelectionAndCursorLayer();
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    const isChord =
+      (e.button === 0 && (e.buttons & 2) !== 0) ||
+      (e.button === 2 && (e.buttons & 1) !== 0) ||
+      ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0);
+
+    if (isChord) {
+      triggerMouseChordUndo(e);
+    }
+  };
 
   // Поинтер события для рисования
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -496,30 +567,7 @@ export const InfiniteCanvas: React.FC = () => {
       (e.button === 2 && (e.buttons & 1) !== 0);
 
     if (isChordLmbRmb) {
-      e.preventDefault();
-      e.stopPropagation();
-
-      strokePointsRef.current = [];
-      shapeAnchorRef.current = null;
-      lassoPointsRef.current = [];
-      const activeCanvas = activeCanvasRef.current;
-      if (activeCanvas) {
-        const ctx = activeCanvas.getContext('2d');
-        if (ctx) {
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
-        }
-      }
-
-      if (isRightClickEraserRef.current && eraserInitialStrokesRef.current) {
-        useCanvasStore.setState({ strokes: eraserInitialStrokesRef.current });
-        eraserInitialStrokesRef.current = null;
-      }
-      isPointerDownRef.current = false;
-      isRightClickEraserRef.current = false;
-
-      useCanvasStore.getState().undo();
-      renderSelectionAndCursorLayer();
+      triggerMouseChordUndo(e);
       return;
     }
 
@@ -757,6 +805,12 @@ export const InfiniteCanvas: React.FC = () => {
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    // Проверка аккорда мыши (ЛКМ + ПКМ) во время движения
+    if ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0) {
+      triggerMouseChordUndo(e);
+      return;
+    }
+
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
@@ -1194,6 +1248,7 @@ export const InfiniteCanvas: React.FC = () => {
       ref={containerRef}
       className={`infinite-canvas-viewport tool-${activeTool} cursor-style-${penCursorStyle}`}
       onContextMenu={(e) => e.preventDefault()}
+      onMouseDown={handleMouseDown}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

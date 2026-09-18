@@ -18,7 +18,7 @@ export const RibbonInsert: React.FC = () => {
   } = useCanvasStore();
 
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
-  const [tableHoverGrid, setTableHoverGrid] = useState<{ r: number; c: number }>({ r: 1, c: 1 });
+  const [tableHoverGrid, setTableHoverGrid] = useState<{ r: number; c: number }>({ r: 0, c: 0 });
   const [matrixRows, setMatrixRows] = useState(3);
   const [matrixCols, setMatrixCols] = useState(3);
   const [matrixType, setMatrixType] = useState<'pmatrix' | 'bmatrix' | 'vmatrix'>('pmatrix');
@@ -26,7 +26,11 @@ export const RibbonInsert: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const toggleDropdown = (name: string) => {
-    setActiveDropdown((prev) => (prev === name ? null : name));
+    setActiveDropdown((prev) => {
+      const next = prev === name ? null : name;
+      if (next === 'table') setTableHoverGrid({ r: 0, c: 0 });
+      return next;
+    });
   };
 
   const closeDropdowns = () => setActiveDropdown(null);
@@ -58,45 +62,41 @@ export const RibbonInsert: React.FC = () => {
       addTextBlock({
         id: newId,
         pageId: currentPageId,
-        x: Math.round(camera.x - defaultWidth / 2),
-        y: Math.round(camera.y - 60),
+        x: Math.round(-camera.x + 80),
+        y: Math.round(-camera.y + 120),
         width: defaultWidth,
         contentHTML: htmlSnippet,
         zIndex: 10 + textBlocks.length,
       });
-      useCanvasStore.getState().setSelection([], [], [newId]);
     }
   };
 
-  // Вставка таблицы (Word-стиль)
+  // Вставка таблицы
   const insertTable = (rows: number, cols: number) => {
-    let html = '<table class="onenote-table"><thead><tr>';
-    for (let c = 1; c <= cols; c++) {
-      html += `<th>Колонка ${c}</th>`;
-    }
-    html += '</tr></thead><tbody>';
-    for (let r = 1; r <= rows; r++) {
-      html += '<tr>';
-      for (let c = 1; c <= cols; c++) {
-        html += `<td></td>`;
+    let tableHtml = '<table class="notes-table" style="border-collapse: collapse; width: 100%; margin: 8px 0;"><tbody>';
+    for (let i = 0; i < rows; i++) {
+      tableHtml += '<tr>';
+      for (let j = 0; j < cols; j++) {
+        tableHtml += '<td style="border: 1px solid #c8c6c4; padding: 6px 10px; min-width: 40px;">&nbsp;</td>';
       }
-      html += '</tr>';
+      tableHtml += '</tr>';
     }
-    html += '</tbody></table><p></p>';
-    insertContent(html, Math.max(460, cols * 120));
+    tableHtml += '</tbody></table><p></p>';
+    insertContent(tableHtml, Math.max(380, cols * 80));
   };
 
-  // Вставка математической матрицы KaTeX
-  const handleInsertMatrix = () => {
-    let body = '';
-    for (let r = 0; r < matrixRows; r++) {
-      const rowVals: string[] = [];
-      for (let c = 0; c < matrixCols; c++) {
-        rowVals.push(r === c ? '1' : '0');
+  // Вставка матрицы KaTeX
+  const insertMatrix = (rows: number, cols: number, type: string) => {
+    let latex = `\\begin{${type}}\n`;
+    for (let i = 0; i < rows; i++) {
+      const rowVals = [];
+      for (let j = 0; j < cols; j++) {
+        rowVals.push(`a_{${i + 1}${j + 1}}`);
       }
-      body += rowVals.join(' & ') + (r < matrixRows - 1 ? ' \\\\ ' : '');
+      latex += '  ' + rowVals.join(' & ') + (i < rows - 1 ? ' \\\\\n' : '\n');
     }
-    const latex = `\\begin{${matrixType}} ${body} \\end{${matrixType}}`;
+    latex += `\\end{${type}}`;
+
     const html = `<div class="katex-rendered-block katex-display-block" data-latex="${latex}">$${latex}$</div><p></p>`;
     insertContent(html, 380);
   };
@@ -141,19 +141,25 @@ export const RibbonInsert: React.FC = () => {
           {activeDropdown === 'table' && (
             <div
               className="dropdown-menu word-table-grid-menu"
-              style={{ minWidth: '220px', padding: '12px' }}
-              onMouseLeave={() => setTableHoverGrid({ r: 1, c: 1 })}
+              style={{ minWidth: '200px', padding: '12px' }}
+              onMouseLeave={() => setTableHoverGrid({ r: 0, c: 0 })}
             >
               <div
                 style={{
                   fontSize: '12px',
                   fontWeight: 600,
                   marginBottom: '8px',
-                  color: 'var(--color-text-secondary)',
+                  color: 'var(--ink-secondary)',
                   textAlign: 'center',
+                  height: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
               >
-                Таблица {tableHoverGrid.r} × {tableHoverGrid.c}
+                {tableHoverGrid.r > 0 && tableHoverGrid.c > 0
+                  ? `Таблица ${tableHoverGrid.r} × ${tableHoverGrid.c}`
+                  : 'Вставка таблицы'}
               </div>
 
               {/* Интерактивная матрица квадратиков */}
@@ -163,8 +169,9 @@ export const RibbonInsert: React.FC = () => {
                   gridTemplateColumns: `repeat(${GRID_COLS}, 18px)`,
                   gridGap: '3px',
                   justifyContent: 'center',
-                  padding: '4px',
-                  background: 'var(--color-bg-secondary)',
+                  padding: '6px',
+                  background: 'var(--bg-app)',
+                  border: '1px solid var(--hairline-subtle)',
                   borderRadius: '6px',
                 }}
               >
@@ -172,7 +179,11 @@ export const RibbonInsert: React.FC = () => {
                   Array.from({ length: GRID_COLS }).map((_, colIdx) => {
                     const r = rowIdx + 1;
                     const c = colIdx + 1;
-                    const isSelected = r <= tableHoverGrid.r && c <= tableHoverGrid.c;
+                    const isSelected =
+                      tableHoverGrid.r > 0 &&
+                      tableHoverGrid.c > 0 &&
+                      r <= tableHoverGrid.r &&
+                      c <= tableHoverGrid.c;
                     return (
                       <div
                         key={`${r}-${c}`}
@@ -182,14 +193,14 @@ export const RibbonInsert: React.FC = () => {
                           width: '18px',
                           height: '18px',
                           border: isSelected
-                            ? '1px solid #7719aa'
-                            : '1px solid var(--color-border)',
+                            ? '1px solid var(--brand-onenote, #7719aa)'
+                            : '1px solid var(--hairline, #d1d5db)',
                           backgroundColor: isSelected
                             ? 'rgba(119, 25, 170, 0.25)'
-                            : 'var(--color-bg-primary)',
+                            : 'var(--bg-hover, #edebe9)',
                           borderRadius: '2px',
                           cursor: 'pointer',
-                          transition: 'all 0.1s ease',
+                          transition: 'background-color 0.1s ease, border-color 0.1s ease',
                         }}
                       />
                     );
@@ -221,7 +232,7 @@ export const RibbonInsert: React.FC = () => {
               className="dropdown-menu"
               style={{ minWidth: '240px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}
             >
-              <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ink-secondary)' }}>
                 Параметры матрицы:
               </div>
 
@@ -236,11 +247,11 @@ export const RibbonInsert: React.FC = () => {
                   style={{
                     width: '50px',
                     padding: '2px 6px',
-                    border: '1px solid var(--color-border)',
+                    border: '1px solid var(--hairline)',
                     borderRadius: '4px',
                     textAlign: 'center',
-                    background: 'var(--color-bg-primary)',
-                    color: 'var(--color-text-primary)',
+                    background: 'var(--bg-app)',
+                    color: 'var(--ink)',
                   }}
                 />
               </div>
@@ -256,11 +267,11 @@ export const RibbonInsert: React.FC = () => {
                   style={{
                     width: '50px',
                     padding: '2px 6px',
-                    border: '1px solid var(--color-border)',
+                    border: '1px solid var(--hairline)',
                     borderRadius: '4px',
                     textAlign: 'center',
-                    background: 'var(--color-bg-primary)',
-                    color: 'var(--color-text-primary)',
+                    background: 'var(--bg-app)',
+                    color: 'var(--ink)',
                   }}
                 />
               </div>
@@ -272,11 +283,11 @@ export const RibbonInsert: React.FC = () => {
                   onChange={(e) => setMatrixType(e.target.value as any)}
                   style={{
                     padding: '3px 6px',
-                    border: '1px solid var(--color-border)',
+                    border: '1px solid var(--hairline)',
                     borderRadius: '4px',
                     fontSize: '12px',
-                    background: 'var(--color-bg-primary)',
-                    color: 'var(--color-text-primary)',
+                    background: 'var(--bg-app)',
+                    color: 'var(--ink)',
                   }}
                 >
                   <option value="pmatrix">( ) круглые</option>
@@ -287,7 +298,7 @@ export const RibbonInsert: React.FC = () => {
 
               <button
                 className="tool-btn highlight"
-                onClick={handleInsertMatrix}
+                onClick={() => insertMatrix(matrixRows, matrixCols, matrixType)}
                 style={{ justifyContent: 'center', marginTop: '4px' }}
               >
                 Вставить матрицу {matrixRows}×{matrixCols}

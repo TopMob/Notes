@@ -803,8 +803,14 @@
 }
 
 .text-block-handle {
-  height: 16px;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  height: 18px;
   background-color: #edebe9;
+  border: 1px solid var(--hairline);
+  border-bottom: none;
   border-top-left-radius: var(--r-xs);
   border-top-right-radius: var(--r-xs);
   display: flex;
@@ -812,12 +818,14 @@
   justify-content: space-between;
   padding: 0 4px;
   cursor: grab;
-  opacity: 0.15;
+  opacity: 0;
+  pointer-events: auto;
   transition: opacity var(--transition-fast);
 }
 
 [data-theme='dark'] .text-block-handle {
   background-color: #323130;
+  border-color: var(--hairline);
 }
 
 .text-block-handle:active {

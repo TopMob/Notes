@@ -5,13 +5,11 @@ import {
   Trash2,
   Settings,
 } from 'lucide-react';
-import { useNotebookStore } from '../../store/useNotebookStore';
 import { useUiStore } from '../../store/useUiStore';
 import { SyncStatusBadge } from '../auth/SyncStatusBadge';
 import { AuthControls } from '../auth/AuthControls';
 
 export const Header: React.FC = () => {
-  const { activeNotebook } = useNotebookStore();
   const {
     isZenMode,
     toggleZenMode,
@@ -21,13 +19,12 @@ export const Header: React.FC = () => {
 
   return (
     <header className="app-header">
-      {/* Левая группа: бренд OneNote и название блокнота */}
+      {/* Левая группа: бренд OneNote */}
       <div className="header-left">
         <div className="brand-group">
           <div className="onenote-logo" title="OneNote">
             <span>N</span>
           </div>
-          <span className="app-title-text">{activeNotebook?.title || 'Записная книжка'}</span>
         </div>
       </div>
 

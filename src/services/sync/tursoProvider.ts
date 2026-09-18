@@ -67,6 +67,27 @@ export class TursoProvider implements ISyncProvider {
     const client = this.getClient();
     const now = Date.now();
     for (const page of pages) {
+      let secId = page.sectionId;
+      if (!secId) {
+        try {
+          const res = await client.execute({
+            sql: 'SELECT section_id FROM pages WHERE id = ? LIMIT 1',
+            args: [page.id],
+          });
+          if (res.rows[0]?.section_id) {
+            secId = String(res.rows[0].section_id);
+          } else {
+            const secRes = await client.execute({
+              sql: 'SELECT id FROM sections WHERE user_id = ? LIMIT 1',
+              args: [userId],
+            });
+            secId = secRes.rows[0]?.id ? String(secRes.rows[0].id) : 'sec-quick-notes';
+          }
+        } catch {
+          secId = 'sec-quick-notes';
+        }
+      }
+
       await client.execute({
         sql: `
           INSERT INTO pages (id, user_id, section_id, title, created_at, updated_at, "order", camera, background, deleted_at)
@@ -82,11 +103,11 @@ export class TursoProvider implements ISyncProvider {
         args: [
           page.id,
           userId,
-          page.sectionId,
-          page.title,
-          page.createdAt,
+          secId,
+          page.title || 'Новая страница',
+          page.createdAt || now,
           now,
-          page.order,
+          page.order ?? 0,
           JSON.stringify(page.camera || {}),
           JSON.stringify(page.background || {}),
         ],

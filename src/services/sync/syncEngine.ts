@@ -74,22 +74,29 @@ class SyncEngine {
       return; // Локальный режим, в сеть ничего не шлём
     }
 
-    // Мержим в очередь
+    const mergeById = <T extends { id: string }>(prev: T[] = [], next: T[] = []): T[] => {
+      const map = new Map<string, T>();
+      for (const item of prev) map.set(item.id, item);
+      for (const item of next) map.set(item.id, item);
+      return Array.from(map.values());
+    };
+
+    // Мержим в очередь с дедупликацией по id (сохраняем самую свежую версию)
     if (payload.notebooks) {
-      this.pendingPayload.notebooks = [...(this.pendingPayload.notebooks || []), ...payload.notebooks];
+      this.pendingPayload.notebooks = mergeById(this.pendingPayload.notebooks, payload.notebooks);
     }
     if (payload.sections) {
-      this.pendingPayload.sections = [...(this.pendingPayload.sections || []), ...payload.sections];
+      this.pendingPayload.sections = mergeById(this.pendingPayload.sections, payload.sections);
     }
     if (payload.pages) {
-      this.pendingPayload.pages = [...(this.pendingPayload.pages || []), ...payload.pages];
+      this.pendingPayload.pages = mergeById(this.pendingPayload.pages, payload.pages);
     }
     if (payload.pageElements) {
       this.pendingPayload.pageElements = {
         pageId: payload.pageElements.pageId,
-        strokes: [...(this.pendingPayload.pageElements?.strokes || []), ...(payload.pageElements.strokes || [])],
-        shapes: [...(this.pendingPayload.pageElements?.shapes || []), ...(payload.pageElements.shapes || [])],
-        textBlocks: [...(this.pendingPayload.pageElements?.textBlocks || []), ...(payload.pageElements.textBlocks || [])],
+        strokes: mergeById(this.pendingPayload.pageElements?.strokes, payload.pageElements.strokes),
+        shapes: mergeById(this.pendingPayload.pageElements?.shapes, payload.pageElements.shapes),
+        textBlocks: mergeById(this.pendingPayload.pageElements?.textBlocks, payload.pageElements.textBlocks),
       };
     }
 
@@ -177,6 +184,11 @@ class SyncEngine {
         }
       }
 
+      const fallbackSecId = localSections[0]?.id || 'sec-quick-notes';
+      for (const p of localPages) {
+        if (!p.sectionId) p.sectionId = fallbackSecId;
+      }
+
       // 2. Стягиваем облако
       const cloudData = await provider.pullAll(userId);
 
@@ -223,7 +235,7 @@ class SyncEngine {
           } else {
             await db.put('pages', {
               id: cPg.id,
-              sectionId: cPg.sectionId,
+              sectionId: cPg.sectionId || fallbackSecId,
               title: cPg.title,
               createdAt: cPg.createdAt,
               order: cPg.order,

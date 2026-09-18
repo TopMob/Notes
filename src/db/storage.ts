@@ -40,6 +40,17 @@ export async function initStorage(): Promise<void> {
     }
 
     await tx.done;
+  } else {
+    // Автоматическое лечение: проверяем, нет ли страниц без sectionId
+    const allSections = await db.getAll('sections');
+    const fallbackSectionId = allSections[0]?.id || INITIAL_SECTIONS[0].id;
+    const allPages = await db.getAll('pages');
+    for (const pg of allPages) {
+      if (!pg.sectionId) {
+        pg.sectionId = fallbackSectionId;
+        await db.put('pages', pg);
+      }
+    }
   }
 }
 
@@ -86,7 +97,7 @@ export interface PageDiff {
  */
 export async function savePageDiff(pageId: string, diff: PageDiff): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction(['pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
+  const tx = db.transaction(['sections', 'pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
 
   if (diff.strokes) {
     const store = tx.objectStore('strokes');
@@ -130,11 +141,17 @@ export async function savePageDiff(pageId: string, diff: PageDiff): Promise<void
     }
   }
 
+  let fullUpdatedPage: Page | null = null;
   if (diff.metadata) {
     const pageStore = tx.objectStore('pages');
-    const page = await pageStore.get(pageId);
-    if (page) {
-      await pageStore.put({ ...page, ...diff.metadata });
+    const existing = await pageStore.get(pageId);
+    if (existing) {
+      fullUpdatedPage = { ...existing, ...diff.metadata };
+      if (!fullUpdatedPage.sectionId) {
+        const allSecs = await tx.objectStore('sections').getAll();
+        fullUpdatedPage.sectionId = allSecs[0]?.id || 'sec-quick-notes';
+      }
+      await pageStore.put(fullUpdatedPage);
     }
   }
 
@@ -147,7 +164,7 @@ export async function savePageDiff(pageId: string, diff: PageDiff): Promise<void
       shapes: diff.shapes?.put,
       textBlocks: diff.textBlocks?.put,
     },
-    pages: diff.metadata ? [{ id: pageId, ...diff.metadata } as any] : undefined,
+    pages: fullUpdatedPage ? [fullUpdatedPage] : undefined,
   });
 }
 
@@ -256,6 +273,10 @@ export async function updatePageMetadata(
   const page = await db.get('pages', pageId);
   if (page) {
     const updated: Page = { ...page, ...updates };
+    if (!updated.sectionId) {
+      const allSecs = await db.getAll('sections');
+      updated.sectionId = allSecs[0]?.id || 'sec-quick-notes';
+    }
     await db.put('pages', updated);
     syncEngine.notifyChange({ pages: [updated] });
   }

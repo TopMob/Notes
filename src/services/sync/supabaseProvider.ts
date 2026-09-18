@@ -3,6 +3,13 @@ import { ISyncProvider, CloudPullResult } from './types';
 import { Notebook, Section, Page } from '../../types/notebook';
 import { Stroke, ShapeObject } from '../../types/canvas';
 import { TextBlock } from '../../types/textblock';
+function deduplicateById<T extends { id: string }>(items: T[]): T[] {
+  const map = new Map<string, T>();
+  for (const item of items) {
+    map.set(item.id, item);
+  }
+  return Array.from(map.values());
+}
 
 export class SupabaseProvider implements ISyncProvider {
   name: 'supabase' = 'supabase';
@@ -19,7 +26,12 @@ export class SupabaseProvider implements ISyncProvider {
 
   private getClient(): SupabaseClient {
     if (!this.client) {
-      throw new Error('Supabase client is not initialized. Check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env');
+      const url = import.meta.env.VITE_SUPABASE_URL;
+      const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+      if (!url || !key) {
+        throw new Error('Supabase URL или Anon Key не заданы в .env');
+      }
+      this.client = createClient(url, key);
     }
     return this.client;
   }
@@ -27,15 +39,17 @@ export class SupabaseProvider implements ISyncProvider {
   async pushNotebooks(userId: string, notebooks: Notebook[]): Promise<void> {
     const client = this.getClient();
     const now = Date.now();
-    const rows = notebooks.map((nb) => ({
-      id: nb.id,
-      user_id: userId,
-      title: nb.title,
-      created_at: nb.createdAt,
-      updated_at: now,
-      order: nb.order,
-      deleted_at: null,
-    }));
+    const rows = deduplicateById(
+      notebooks.map((nb) => ({
+        id: nb.id,
+        user_id: userId,
+        title: nb.title,
+        created_at: nb.createdAt,
+        updated_at: now,
+        order: nb.order,
+        deleted_at: null,
+      }))
+    );
 
     const { error } = await client.from('notebooks').upsert(rows, { onConflict: 'id' });
     if (error) throw error;
@@ -44,16 +58,18 @@ export class SupabaseProvider implements ISyncProvider {
   async pushSections(userId: string, sections: Section[]): Promise<void> {
     const client = this.getClient();
     const now = Date.now();
-    const rows = sections.map((sec) => ({
-      id: sec.id,
-      user_id: userId,
-      notebook_id: sec.notebookId,
-      title: sec.title,
-      color: sec.color,
-      order: sec.order,
-      updated_at: now,
-      deleted_at: null,
-    }));
+    const rows = deduplicateById(
+      sections.map((sec) => ({
+        id: sec.id,
+        user_id: userId,
+        notebook_id: sec.notebookId,
+        title: sec.title,
+        color: sec.color,
+        order: sec.order,
+        updated_at: now,
+        deleted_at: null,
+      }))
+    );
 
     const { error } = await client.from('sections').upsert(rows, { onConflict: 'id' });
     if (error) throw error;
@@ -62,20 +78,50 @@ export class SupabaseProvider implements ISyncProvider {
   async pushPages(userId: string, pages: Page[]): Promise<void> {
     const client = this.getClient();
     const now = Date.now();
-    const rows = pages.map((page) => ({
-      id: page.id,
-      user_id: userId,
-      section_id: page.sectionId,
-      title: page.title,
-      created_at: page.createdAt,
-      updated_at: now,
-      order: page.order,
-      camera: page.camera,
-      background: page.background,
-      deleted_at: null,
-    }));
 
-    const { error } = await client.from('pages').upsert(rows, { onConflict: 'id' });
+    // Защита от null value in column "section_id": восстанавливаем отсутствующий sectionId
+    const rows = [];
+    for (const page of pages) {
+      let secId = page.sectionId;
+      if (!secId) {
+        try {
+          const { data } = await client
+            .from('pages')
+            .select('section_id')
+            .eq('id', page.id)
+            .maybeSingle();
+          if (data?.section_id) {
+            secId = data.section_id;
+          } else {
+            const { data: sec } = await client
+              .from('sections')
+              .select('id')
+              .eq('user_id', userId)
+              .limit(1)
+              .maybeSingle();
+            secId = sec?.id || 'sec-quick-notes';
+          }
+        } catch {
+          secId = 'sec-quick-notes';
+        }
+      }
+
+      rows.push({
+        id: page.id,
+        user_id: userId,
+        section_id: secId,
+        title: page.title || 'Новая страница',
+        created_at: page.createdAt || now,
+        updated_at: now,
+        order: page.order ?? 0,
+        camera: page.camera,
+        background: page.background,
+        deleted_at: null,
+      });
+    }
+
+    const uniqueRows = deduplicateById(rows);
+    const { error } = await client.from('pages').upsert(uniqueRows, { onConflict: 'id' });
     if (error) throw error;
   }
 
@@ -134,8 +180,9 @@ export class SupabaseProvider implements ISyncProvider {
       }
     }
 
-    if (rows.length > 0) {
-      const { error } = await client.from('page_elements').upsert(rows, { onConflict: 'id' });
+    const uniqueRows = deduplicateById(rows);
+    if (uniqueRows.length > 0) {
+      const { error } = await client.from('page_elements').upsert(uniqueRows, { onConflict: 'id' });
       if (error) throw error;
     }
   }
