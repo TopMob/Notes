@@ -12,6 +12,7 @@ import { SpatialItem } from '../../canvas/engine/SpatialIndex';
 import { TextBlock } from '../../types/textblock';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
 import { useUiStore } from '../../store/useUiStore';
+import { GestureManager } from '../../canvas/input/GestureManager';
 
 export const InfiniteCanvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -33,6 +34,7 @@ export const InfiniteCanvas: React.FC = () => {
     shapeWidth,
     camera,
     setCamera,
+    drawWithTouch,
     background,
     currentPageId,
     strokes,
@@ -559,8 +561,8 @@ export const InfiniteCanvas: React.FC = () => {
     }
   };
 
-  // Поинтер события для рисования
-  const handlePointerDown = (e: React.PointerEvent) => {
+  // Одиночный указатель (мышь, стилус или 1 палец в режиме рисования)
+  const handleSinglePointerDown = (e: React.PointerEvent) => {
     // Проверка аккорда мыши: ЛКМ + ПКМ (Rocker gesture / Chord click) -> Отмена действия (Ctrl+Z)
     const isChordLmbRmb =
       ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0) ||
@@ -805,7 +807,7 @@ export const InfiniteCanvas: React.FC = () => {
     }
   };
 
-  const handlePointerMove = (e: React.PointerEvent) => {
+  const handleSinglePointerMove = (e: React.PointerEvent) => {
     // Проверка аккорда мыши (ЛКМ + ПКМ) во время движения
     if ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0) {
       triggerMouseChordUndo(e);
@@ -986,7 +988,7 @@ export const InfiniteCanvas: React.FC = () => {
     }
   }, []);
 
-  const handlePointerUp = (e: React.PointerEvent) => {
+  const handleSinglePointerUp = (e: React.PointerEvent) => {
     if (panStartRef.current) {
       panStartRef.current = null;
       try {
@@ -1192,6 +1194,124 @@ export const InfiniteCanvas: React.FC = () => {
     }
   };
 
+  // Отмена незавершённого одиночного штриха (буферизация при двухпальцевом жесте или palm rejection)
+  const cancelActiveStroke = useCallback(() => {
+    strokePointsRef.current = [];
+    shapeAnchorRef.current = null;
+    lassoPointsRef.current = [];
+    isPointerDownRef.current = false;
+    isRightClickEraserRef.current = false;
+    panStartRef.current = null;
+    moveDragStartRef.current = null;
+
+    const activeCanvas = activeCanvasRef.current;
+    if (activeCanvas) {
+      const ctx = activeCanvas.getContext('2d');
+      if (ctx) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
+      }
+    }
+    renderSelectionAndCursorLayer();
+  }, [renderSelectionAndCursorLayer]);
+
+  const gestureManagerRef = useRef<GestureManager | null>(null);
+
+  const gestureCallbacksRef = useRef({
+    onPanZoom: ({ dx, dy, scale, screenCenter }: { dx: number; dy: number; scale: number; screenCenter: { x: number; y: number } }) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      const vp = {
+        w: rect?.width || viewportSize.w,
+        h: rect?.height || viewportSize.h,
+      };
+      useCanvasStore.getState().setCamera((prev) => {
+        let nextCam = prev;
+        if (Math.abs(scale - 1) > 0.001) {
+          nextCam = Viewport.zoomAtPoint(prev, screenCenter, scale, vp);
+        }
+        return {
+          ...nextCam,
+          x: nextCam.x - dx / nextCam.zoom,
+          y: nextCam.y - dy / nextCam.zoom,
+        };
+      });
+    },
+    onUndo: () => {
+      globalCommandStack.undo();
+    },
+    onRedo: () => {
+      globalCommandStack.redo();
+    },
+    onDoubleTap: (screenPos: { x: number; y: number }) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      const vp = {
+        w: rect?.width || viewportSize.w,
+        h: rect?.height || viewportSize.h,
+      };
+      useCanvasStore.getState().setCamera((prev) => {
+        const targetZoom = Math.abs(prev.zoom - 1.0) < 0.08 ? 1.5 : 1.0;
+        return Viewport.zoomAtPoint(prev, screenPos, targetZoom / prev.zoom, vp);
+      });
+    },
+    onLongPress: (_screenPos: { x: number; y: number }) => {
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try {
+          navigator.vibrate(40);
+        } catch {}
+      }
+    },
+    onSinglePointerDown: (e: PointerEvent | React.PointerEvent) => {
+      handleSinglePointerDown(e as React.PointerEvent);
+    },
+    onSinglePointerMove: (e: PointerEvent | React.PointerEvent) => {
+      handleSinglePointerMove(e as React.PointerEvent);
+    },
+    onSinglePointerUp: (e: PointerEvent | React.PointerEvent) => {
+      handleSinglePointerUp(e as React.PointerEvent);
+    },
+    onCancelActiveStroke: () => {
+      cancelActiveStroke();
+    },
+  });
+
+  gestureCallbacksRef.current.onSinglePointerDown = (e) => handleSinglePointerDown(e as React.PointerEvent);
+  gestureCallbacksRef.current.onSinglePointerMove = (e) => handleSinglePointerMove(e as React.PointerEvent);
+  gestureCallbacksRef.current.onSinglePointerUp = (e) => handleSinglePointerUp(e as React.PointerEvent);
+  gestureCallbacksRef.current.onCancelActiveStroke = cancelActiveStroke;
+
+  if (!gestureManagerRef.current) {
+    gestureManagerRef.current = new GestureManager(
+      {
+        onPanZoom: (params) => gestureCallbacksRef.current.onPanZoom(params),
+        onUndo: () => gestureCallbacksRef.current.onUndo(),
+        onRedo: () => gestureCallbacksRef.current.onRedo(),
+        onDoubleTap: (pos) => gestureCallbacksRef.current.onDoubleTap(pos),
+        onLongPress: (pos) => gestureCallbacksRef.current.onLongPress(pos),
+        onSinglePointerDown: (e) => gestureCallbacksRef.current.onSinglePointerDown(e),
+        onSinglePointerMove: (e) => gestureCallbacksRef.current.onSinglePointerMove(e),
+        onSinglePointerUp: (e) => gestureCallbacksRef.current.onSinglePointerUp(e),
+        onCancelActiveStroke: () => gestureCallbacksRef.current.onCancelActiveStroke(),
+      },
+      { drawWithTouch }
+    );
+  }
+
+  useEffect(() => {
+    gestureManagerRef.current?.updateOptions({ drawWithTouch });
+  }, [drawWithTouch]);
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    gestureManagerRef.current?.handlePointerDown(e);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    gestureManagerRef.current?.handlePointerMove(e);
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    gestureManagerRef.current?.handlePointerUp(e);
+  };
+
   const handlePointerLeave = () => {
     if (cursorWorldPosRef.current) {
       cursorWorldPosRef.current = null;
@@ -1240,6 +1360,7 @@ export const InfiniteCanvas: React.FC = () => {
         height: '100%',
         overflow: 'hidden',
         touchAction: 'none',
+        overscrollBehavior: 'none',
       }}
     >
       {/* Слой 1: Фон (клетка, линейка или чистый) */}

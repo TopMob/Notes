@@ -121,6 +121,9 @@ interface CanvasState {
   restoreStrokesWithDirty: (strokes: Stroke[]) => void;
 
   // Настройки пера и палитры
+  drawWithTouch: boolean;
+  setDrawWithTouch: (enabled: boolean) => void;
+  toggleDrawWithTouch: () => void;
   penCursorStyle: PenCursorStyle;
   setPenCursorStyle: (style: PenCursorStyle) => void;
   rightClickAction: RightClickAction;
@@ -261,6 +264,25 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     canRedo: false,
     undo: () => globalCommandStack.undo(),
     redo: () => globalCommandStack.redo(),
+
+    drawWithTouch: localStorage.getItem('notes_draw_with_touch') !== 'false',
+    setDrawWithTouch: (drawWithTouch) => {
+      try {
+        localStorage.setItem('notes_draw_with_touch', String(drawWithTouch));
+      } catch {
+        // ignore
+      }
+      set({ drawWithTouch });
+    },
+    toggleDrawWithTouch: () => {
+      const next = !get().drawWithTouch;
+      try {
+        localStorage.setItem('notes_draw_with_touch', String(next));
+      } catch {
+        // ignore
+      }
+      set({ drawWithTouch: next });
+    },
 
     activeTool: 'pen',
     penColor: '#201f1e',

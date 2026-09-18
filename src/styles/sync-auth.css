@@ -30,11 +30,60 @@
 }
 
 .auth-placeholder {
-  width: 28px;
-  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  width: auto;
+  max-width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.auth-error-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: var(--r-md, 6px);
+  background: rgba(216, 59, 1, 0.08);
+  border: 1px solid rgba(216, 59, 1, 0.25);
+  color: #b45309;
+  font-size: 11px;
+  line-height: 1.2;
+  max-width: 100%;
+}
+
+.auth-error-text {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .auth-error-text {
+    display: none;
+  }
+}
+
+.auth-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--brand-onenote, #7719aa);
+  background: rgba(119, 25, 170, 0.08);
+  border: 1px solid rgba(119, 25, 170, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.auth-retry-btn:hover {
+  background: rgba(119, 25, 170, 0.18);
 }
 
 .auth-spinner {

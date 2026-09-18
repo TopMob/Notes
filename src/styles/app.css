@@ -9,6 +9,7 @@
   height: 100vh;
   width: 100vw;
   overflow: hidden;
+  overscroll-behavior: none;
   background-color: var(--bg-app);
 }
 
@@ -120,6 +121,18 @@
   flex: 1;
   max-width: 440px;
   margin: 0 var(--sp-4);
+}
+
+@media (max-width: 900px) {
+  .header-center {
+    display: none;
+  }
+  .app-header {
+    padding: 0 var(--sp-2);
+  }
+  .header-left, .header-right {
+    gap: var(--sp-1);
+  }
 }
 
 .header-icon-btn {
@@ -704,6 +717,8 @@
   height: 100%;
   background-color: var(--bg-canvas);
   cursor: default;
+  touch-action: none;
+  overscroll-behavior: none;
 }
 
 .infinite-canvas-viewport.tool-pen {

@@ -8,6 +8,7 @@ html, body {
   height: 100%;
   width: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
   font-family: var(--font-sans);
   color: var(--ink);
   background-color: var(--bg-app);

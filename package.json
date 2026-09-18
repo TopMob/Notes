@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types --test scripts/tests/sync-and-history.test.mjs"
+    "test": "node --experimental-strip-types --test scripts/tests/sync-and-history.test.mjs scripts/tests/gestures.test.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.9",

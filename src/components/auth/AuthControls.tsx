@@ -46,30 +46,55 @@ export const AuthControls: React.FC = () => {
   }, [isLoaded, isSignedIn, user, getToken, setUser, providerType]);
 
   const [loadTimedOut, setLoadTimedOut] = React.useState(false);
+  const [retryKey, setRetryKey] = React.useState(0);
 
   useEffect(() => {
     if (!isLoaded) {
-      const timer = setTimeout(() => setLoadTimedOut(true), 4000);
+      // Даем планшетам и медленным сетям до 9 секунд до предупреждения
+      const timer = setTimeout(() => {
+        setLoadTimedOut(true);
+        console.warn(
+          '[Clerk Auth] Модуль авторизации Clerk не ответил за 9с. ' +
+          'Возможные причины: домен *.clerk.accounts.dev недоступен без VPN в текущей сети, ' +
+          'блокировка сторонних скриптов/CSP, либо нестабильное подключение.'
+        );
+      }, 9000);
       return () => clearTimeout(timer);
     } else {
       setLoadTimedOut(false);
     }
-  }, [isLoaded]);
+  }, [isLoaded, retryKey]);
+
+  const handleRetry = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLoadTimedOut(false);
+    setRetryKey((prev) => prev + 1);
+    console.info('[Clerk Auth] Повторная попытка проверки статуса авторизации...');
+  };
 
   if (!isLoaded) {
     if (loadTimedOut) {
       return (
         <div
           className="auth-placeholder"
-          title="Не удалось загрузить модуль Clerk. Проверьте ключ VITE_CLERK_PUBLISHABLE_KEY (в режиме Production требуется собственный домен или настроенный прокси)."
-          style={{ fontSize: '12px', color: '#b45309', padding: '0 6px', cursor: 'help' }}
+          title="Не удалось подключиться к сервису авторизации Clerk. На устройствах без VPN домен может быть недоступен."
         >
-          <span>Авторизация не загрузилась</span>
+          <div className="auth-error-badge">
+            <span className="auth-error-text">Авторизация недоступна</span>
+            <button
+              type="button"
+              className="auth-retry-btn"
+              onClick={handleRetry}
+              title="Повторить попытку подключения к Clerk"
+            >
+              Повторить
+            </button>
+          </div>
         </div>
       );
     }
     return (
-      <div className="auth-placeholder">
+      <div className="auth-placeholder" title="Загрузка профиля...">
         <div className="auth-spinner" />
       </div>
     );

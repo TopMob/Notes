@@ -15,6 +15,7 @@ import {
   Circle,
   ArrowUpRight,
   SplitSquareVertical,
+  Hand,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
 
@@ -40,6 +41,8 @@ export const RibbonDraw: React.FC = () => {
     canRedo,
     undo,
     redo,
+    drawWithTouch,
+    toggleDrawWithTouch,
   } = useCanvasStore();
 
   const [isEraserMenuOpen, setIsEraserMenuOpen] = useState(false);
@@ -105,6 +108,19 @@ export const RibbonDraw: React.FC = () => {
         >
           <Lasso size={16} />
           <span className="tool-btn-label">Лассо</span>
+        </button>
+
+        <button
+          className={`tool-btn ${drawWithTouch ? 'active' : ''}`}
+          onClick={toggleDrawWithTouch}
+          title={
+            drawWithTouch
+              ? 'Рисование пальцем (включено): 1 палец рисует, 2 пальца — панорамирование и зум'
+              : 'Рисование пальцем (выключено): 1 палец только двигает холст, рисует только стилус'
+          }
+        >
+          <Hand size={16} />
+          <span className="tool-btn-label">Палец</span>
         </button>
 
         {/* Ластик с меню (по умолчанию точечный ластик) */}
