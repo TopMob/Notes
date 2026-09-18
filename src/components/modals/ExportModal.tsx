@@ -5,7 +5,6 @@ import { useNotebookStore } from '../../store/useNotebookStore';
 import { useUiStore } from '../../store/useUiStore';
 import { drawStrokeToCanvas } from '../../canvas/stroke/freehand';
 import { drawShapeToCanvas } from '../../canvas/stroke/shapes';
-import { getDB } from '../../db/idb';
 
 export const ExportModal: React.FC = () => {
   const { isExportOpen, setExportOpen } = useUiStore();
@@ -211,84 +210,38 @@ export const ExportModal: React.FC = () => {
     }, 150);
   };
 
-  // Экспорт всей базы в сжатый JSON-бэкап (Gzip .json.gz)
+  // Экспорт всей базы в JSON-бэкап
   const handleExportJson = async () => {
-    const db = await getDB();
-    const data = {
-      notebooks: await db.getAll('notebooks'),
-      sections: await db.getAll('sections'),
-      pages: await db.getAll('pages'),
-      strokes: await db.getAll('strokes'),
-      shapes: await db.getAll('shapes'),
-      textBlocks: await db.getAll('textBlocks'),
-      exportDate: new Date().toISOString(),
-    };
+    try {
+      const { exportFullBackup } = await import('../../db/storage');
+      const jsonString = await exportFullBackup();
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const fileName = `onenote_backup_${new Date().toISOString().slice(0, 10)}.json`;
 
-    const jsonString = JSON.stringify(data);
-    let blob: Blob;
-    let fileName = `onenote_backup_${new Date().toISOString().slice(0, 10)}.json.gz`;
-
-    if (typeof CompressionStream !== 'undefined') {
-      const stream = new Blob([jsonString]).stream().pipeThrough(new CompressionStream('gzip'));
-      blob = await new Response(stream).blob();
-    } else {
-      blob = new Blob([jsonString], { type: 'application/json' });
-      fileName = `onenote_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      setExportOpen(false);
+    } catch (err: any) {
+      alert('Ошибка при создании бэкапа: ' + err.message);
     }
-
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    a.click();
-    URL.revokeObjectURL(url);
-    setExportOpen(false);
   };
 
-  // Импорт из JSON / JSON.GZ бэкапа
+  // Импорт из JSON бэкапа
   const handleImportJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      let jsonStr = '';
-      if (file.name.endsWith('.gz') || file.type.includes('gzip')) {
-        const stream = file.stream().pipeThrough(new DecompressionStream('gzip'));
-        jsonStr = await new Response(stream).text();
-      } else {
-        jsonStr = await file.text();
-      }
-
-      const json = JSON.parse(jsonStr);
-      const db = await getDB();
-      const tx = db.transaction(
-        ['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'],
-        'readwrite'
-      );
-
-      if (Array.isArray(json.notebooks)) {
-        for (const nb of json.notebooks) await tx.objectStore('notebooks').put(nb);
-      }
-      if (Array.isArray(json.sections)) {
-        for (const sec of json.sections) await tx.objectStore('sections').put(sec);
-      }
-      if (Array.isArray(json.pages)) {
-        for (const pg of json.pages) await tx.objectStore('pages').put(pg);
-      }
-      if (Array.isArray(json.strokes)) {
-        for (const st of json.strokes) await tx.objectStore('strokes').put(st);
-      }
-      if (Array.isArray(json.shapes)) {
-        for (const sh of json.shapes) await tx.objectStore('shapes').put(sh);
-      }
-      if (Array.isArray(json.textBlocks)) {
-        for (const tb of json.textBlocks) await tx.objectStore('textBlocks').put(tb);
-      }
-
-      await tx.done;
-      alert('Данные успешно импортированы! Страница будет перезагружена.');
+      const { importFullBackup } = await import('../../db/storage');
+      const jsonStr = await file.text();
+      const res = await importFullBackup(jsonStr);
+      alert(res.stats + ' Приложение будет перезагружено.');
       window.location.reload();
-    } catch (err) {
+    } catch (err: any) {
       alert('Ошибка при чтении файла бэкапа: ' + (err as Error).message);
     }
   };

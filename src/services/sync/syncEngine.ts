@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { SyncProviderType, SyncStatus, SyncPayload, ISyncProvider } from './types';
 import { TursoProvider } from './tursoProvider';
-import { SupabaseProvider } from './supabaseProvider';
+import { SupabaseProvider, AccessTokenProvider } from './supabaseProvider';
 import {
   loadNotebooks,
   loadSections,
@@ -50,6 +50,8 @@ class SyncEngine {
   private supabaseProvider: SupabaseProvider;
   private idleTimer: any = null;
   private maxWaitTimer: any = null;
+  private retryTimer: any = null;
+  private retryDelay = 2000; // Начинаем повтор с 2 сек, удваиваем до 60 сек
   private readonly IDLE_DELAY = 15000; // 15 секунд бездействия
   private readonly MAX_WAIT = 60000;   // 1 минута непрерывной работы
   private pendingPayload: SyncPayload = {};
@@ -71,11 +73,50 @@ class SyncEngine {
     }
   }
 
+  public setAuthTokenProvider(provider: AccessTokenProvider | null) {
+    this.supabaseProvider.setTokenProvider(provider);
+  }
+
   private getActiveProvider(): ISyncProvider | null {
     const { providerType } = useSyncStore.getState();
     if (providerType === 'turso') return this.tursoProvider;
     if (providerType === 'supabase') return this.supabaseProvider;
     return null; // 'local'
+  }
+
+  private mergePayloads(prev: SyncPayload, next: SyncPayload): SyncPayload {
+    const mergeById = <T extends { id: string }>(a: T[] = [], b: T[] = []): T[] => {
+      const map = new Map<string, T>();
+      for (const item of a) map.set(item.id, item);
+      for (const item of b) map.set(item.id, item);
+      return Array.from(map.values());
+    };
+
+    const hasNextElements = next.pageElements && next.pageElements.pageId;
+    const isSamePage = prev.pageElements?.pageId === next.pageElements?.pageId;
+
+    return {
+      notebooks: mergeById(prev.notebooks, next.notebooks),
+      sections: mergeById(prev.sections, next.sections),
+      pages: mergeById(prev.pages, next.pages),
+      pageElements: hasNextElements
+        ? {
+            pageId: next.pageElements!.pageId,
+            strokes: mergeById(
+              isSamePage ? prev.pageElements?.strokes : [],
+              next.pageElements!.strokes
+            ),
+            shapes: mergeById(
+              isSamePage ? prev.pageElements?.shapes : [],
+              next.pageElements!.shapes
+            ),
+            textBlocks: mergeById(
+              isSamePage ? prev.pageElements?.textBlocks : [],
+              next.pageElements!.textBlocks
+            ),
+          }
+        : prev.pageElements,
+    };
   }
 
   /**
@@ -91,31 +132,7 @@ class SyncEngine {
       return; // Локальный режим, в сеть ничего не шлём
     }
 
-    const mergeById = <T extends { id: string }>(prev: T[] = [], next: T[] = []): T[] => {
-      const map = new Map<string, T>();
-      for (const item of prev) map.set(item.id, item);
-      for (const item of next) map.set(item.id, item);
-      return Array.from(map.values());
-    };
-
-    // Мержим в очередь с дедупликацией по id (сохраняем самую свежую версию)
-    if (payload.notebooks) {
-      this.pendingPayload.notebooks = mergeById(this.pendingPayload.notebooks, payload.notebooks);
-    }
-    if (payload.sections) {
-      this.pendingPayload.sections = mergeById(this.pendingPayload.sections, payload.sections);
-    }
-    if (payload.pages) {
-      this.pendingPayload.pages = mergeById(this.pendingPayload.pages, payload.pages);
-    }
-    if (payload.pageElements) {
-      this.pendingPayload.pageElements = {
-        pageId: payload.pageElements.pageId,
-        strokes: mergeById(this.pendingPayload.pageElements?.strokes, payload.pageElements.strokes),
-        shapes: mergeById(this.pendingPayload.pageElements?.shapes, payload.pageElements.shapes),
-        textBlocks: mergeById(this.pendingPayload.pageElements?.textBlocks, payload.pageElements.textBlocks),
-      };
-    }
+    this.pendingPayload = this.mergePayloads(this.pendingPayload, payload);
 
     // Перезапуск таймера бездействия (15 секунд тишины после последнего действия)
     if (this.idleTimer) {
@@ -148,8 +165,8 @@ class SyncEngine {
     });
   }
 
-  private async flushPendingChanges() {
-    // Сбрасываем оба таймера
+  public async flushPendingChanges() {
+    // Сбрасываем таймеры
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
@@ -157,6 +174,10 @@ class SyncEngine {
     if (this.maxWaitTimer) {
       clearTimeout(this.maxWaitTimer);
       this.maxWaitTimer = null;
+    }
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
     }
 
     const { userId } = useSyncStore.getState();
@@ -191,12 +212,22 @@ class SyncEngine {
         await provider.pushPageElements(userId, payload.pageElements.pageId, payload.pageElements);
       }
 
+      this.retryDelay = 2000;
       useSyncStore.getState().setStatus('synced');
       useSyncStore.getState().setLastSyncedAt(Date.now());
       useSyncStore.getState().setError(null);
     } catch (err: any) {
-      console.error('[SyncEngine] Error flushing changes:', err);
+      console.error('[SyncEngine] Error flushing changes, restoring payload to queue:', err);
+      // ВОССТАНОВЛЕНИЕ В ОЧЕРЕДЬ: мержим обратно
+      this.pendingPayload = this.mergePayloads(payload, this.pendingPayload);
       useSyncStore.getState().setError(err.message || 'Ошибка синхронизации');
+
+      // Планируем повтор с экспоненциальным backoff
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null;
+        this.flushPendingChanges();
+      }, this.retryDelay);
+      this.retryDelay = Math.min(this.retryDelay * 2, 60000);
     }
   }
 
@@ -309,6 +340,11 @@ class SyncEngine {
         await useNotebookStore.getState().refreshFromStorage();
       }
 
+      console.log(
+        `[SyncEngine] syncAll completed successfully. Local: ${localNotebooks.length} notebooks, ${localPages.length} pages. Cloud elements: ${cloudData.elements.length}`
+      );
+
+      this.retryDelay = 2000;
       useSyncStore.getState().setStatus('synced');
       useSyncStore.getState().setLastSyncedAt(Date.now());
       useSyncStore.getState().setError(null);

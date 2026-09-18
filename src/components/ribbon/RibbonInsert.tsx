@@ -10,7 +10,7 @@ import { useCanvasStore } from '../../store/useCanvasStore';
 export const RibbonInsert: React.FC = () => {
   const {
     addTextBlock,
-    updateTextBlock,
+    updateTextBlockWithHistory,
     camera,
     currentPageId,
     textBlocks,
@@ -53,10 +53,14 @@ export const RibbonInsert: React.FC = () => {
     const activeBlock = textBlocks.find((b) => b.id === activeBlockId);
 
     if (activeBlock) {
-      updateTextBlock(activeBlock.id, {
-        contentHTML: activeBlock.contentHTML + htmlSnippet,
-        width: Math.max(activeBlock.width, defaultWidth),
-      });
+      updateTextBlockWithHistory(
+        activeBlock.id,
+        {
+          contentHTML: activeBlock.contentHTML + htmlSnippet,
+          width: Math.max(activeBlock.width, defaultWidth),
+        },
+        'Вставка содержимого'
+      );
     } else {
       const newId = `tb-${Date.now()}`;
       addTextBlock({

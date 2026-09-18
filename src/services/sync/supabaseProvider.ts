@@ -3,7 +3,7 @@ import { ISyncProvider, CloudPullResult } from './types';
 import { Notebook, Section, Page } from '../../types/notebook';
 import { Stroke, ShapeObject } from '../../types/canvas';
 import { TextBlock } from '../../types/textblock';
-import { compressJson, decompressJson } from './compression';
+import { compressBatch, decompressBatch, decompressJson } from './compression';
 
 function deduplicateById<T extends { id: string }>(items: T[]): T[] {
   const map = new Map<string, T>();
@@ -13,29 +13,67 @@ function deduplicateById<T extends { id: string }>(items: T[]): T[] {
   return Array.from(map.values());
 }
 
+export type AccessTokenProvider = () => Promise<string | null>;
+
 export class SupabaseProvider implements ISyncProvider {
   name: 'supabase' = 'supabase';
   private client: SupabaseClient | null = null;
+  private tokenProvider: AccessTokenProvider | null = null;
 
-  constructor() {
+  constructor(tokenProvider?: AccessTokenProvider) {
+    if (tokenProvider) {
+      this.tokenProvider = tokenProvider;
+    }
+    this.initClient();
+  }
+
+  public setTokenProvider(tokenProvider: AccessTokenProvider | null) {
+    this.tokenProvider = tokenProvider;
+    this.initClient();
+  }
+
+  private initClient() {
     const url = import.meta.env.VITE_SUPABASE_URL || '';
     const key = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
     if (url && key) {
-      this.client = createClient(url, key);
+      this.client = createClient(url, key, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+        global: {
+          headers: {},
+        },
+        accessToken: this.tokenProvider
+          ? async () => {
+              try {
+                return (await this.tokenProvider!()) ?? null;
+              } catch (e) {
+                console.warn('[SupabaseProvider] Error obtaining access token:', e);
+                return null;
+              }
+            }
+          : undefined,
+      });
+    } else {
+      this.client = null;
     }
   }
 
   private getClient(): SupabaseClient {
+    if (!this.client) {
+      this.initClient();
+    }
     if (!this.client) {
       const url = import.meta.env.VITE_SUPABASE_URL;
       const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
       if (!url || !key) {
         throw new Error('Supabase URL или Anon Key не заданы в .env');
       }
-      this.client = createClient(url, key);
+      this.initClient();
     }
-    return this.client;
+    return this.client!;
   }
 
   async pushNotebooks(userId: string, notebooks: Notebook[]): Promise<void> {
@@ -127,6 +165,11 @@ export class SupabaseProvider implements ISyncProvider {
     if (error) throw error;
   }
 
+  /**
+   * Пакетное сохранение элементов страницы в Supabase.
+   * Упаковывает элементы страницы в единый бандл (schema_version = 2),
+   * обеспечивая лучшее сжатие и атомарность сохранения без перегрузки сети.
+   */
   async pushPageElements(
     userId: string,
     pageId: string,
@@ -138,55 +181,21 @@ export class SupabaseProvider implements ISyncProvider {
   ): Promise<void> {
     const client = this.getClient();
     const now = Date.now();
-    const rows: any[] = [];
 
-    if (elements.strokes) {
-      for (const s of elements.strokes) {
-        rows.push({
-          id: s.id,
-          user_id: userId,
-          page_id: pageId,
-          type: 'stroke',
-          data: await compressJson(s),
-          updated_at: now,
-          deleted_at: null,
-        });
-      }
-    }
+    const compressedBatch = await compressBatch(elements);
+    const bundleRow = {
+      id: `bundle_${pageId}`,
+      user_id: userId,
+      page_id: pageId,
+      type: 'bundle',
+      data: compressedBatch,
+      schema_version: 2,
+      updated_at: now,
+      deleted_at: null,
+    };
 
-    if (elements.shapes) {
-      for (const sh of elements.shapes) {
-        rows.push({
-          id: sh.id,
-          user_id: userId,
-          page_id: pageId,
-          type: 'shape',
-          data: await compressJson(sh),
-          updated_at: now,
-          deleted_at: null,
-        });
-      }
-    }
-
-    if (elements.textBlocks) {
-      for (const tb of elements.textBlocks) {
-        rows.push({
-          id: tb.id,
-          user_id: userId,
-          page_id: pageId,
-          type: 'textBlock',
-          data: await compressJson(tb),
-          updated_at: now,
-          deleted_at: null,
-        });
-      }
-    }
-
-    const uniqueRows = deduplicateById(rows);
-    if (uniqueRows.length > 0) {
-      const { error } = await client.from('page_elements').upsert(uniqueRows, { onConflict: 'id' });
-      if (error) throw error;
-    }
+    const { error } = await client.from('page_elements').upsert([bundleRow], { onConflict: 'id' });
+    if (error) throw error;
   }
 
   async pullAll(userId: string, since: number = 0): Promise<CloudPullResult> {
@@ -203,6 +212,58 @@ export class SupabaseProvider implements ISyncProvider {
     if (secRes.error) throw secRes.error;
     if (pageRes.error) throw pageRes.error;
     if (elRes.error) throw elRes.error;
+
+    const parsedElements: CloudPullResult['elements'] = [];
+
+    for (const r of elRes.data || []) {
+      const updatedAt = Number(r.updated_at);
+      const deletedAt = r.deleted_at ? Number(r.deleted_at) : null;
+
+      if (r.type === 'bundle') {
+        // Распаковываем пакетный бандл страницы (schema_version = 2)
+        const bundle = await decompressBatch(r.data);
+        for (const stroke of bundle.strokes) {
+          parsedElements.push({
+            id: stroke.id,
+            pageId: r.page_id,
+            type: 'stroke',
+            data: stroke,
+            updatedAt,
+            deletedAt,
+          });
+        }
+        for (const shape of bundle.shapes) {
+          parsedElements.push({
+            id: shape.id,
+            pageId: r.page_id,
+            type: 'shape',
+            data: shape,
+            updatedAt,
+            deletedAt,
+          });
+        }
+        for (const tb of bundle.textBlocks) {
+          parsedElements.push({
+            id: tb.id,
+            pageId: r.page_id,
+            type: 'textBlock',
+            data: tb,
+            updatedAt,
+            deletedAt,
+          });
+        }
+      } else {
+        // Обратная совместимость для старых записей (schema_version = 1 или поэлементные)
+        parsedElements.push({
+          id: r.id,
+          pageId: r.page_id,
+          type: r.type,
+          data: await decompressJson(r.data),
+          updatedAt,
+          deletedAt,
+        });
+      }
+    }
 
     return {
       notebooks: (nbRes.data || []).map((r: any) => ({
@@ -233,16 +294,7 @@ export class SupabaseProvider implements ISyncProvider {
         background: r.background || { type: 'grid', color: '#ffffff' },
         deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
       })),
-      elements: await Promise.all(
-        (elRes.data || []).map(async (r: any) => ({
-          id: r.id,
-          pageId: r.page_id,
-          type: r.type,
-          data: await decompressJson(r.data),
-          updatedAt: Number(r.updated_at),
-          deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
-        }))
-      ),
+      elements: parsedElements,
     };
   }
 

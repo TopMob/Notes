@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import {
   useUser,
+  useAuth,
   SignInButton,
   UserButton,
 } from '@clerk/clerk-react';
@@ -9,6 +10,7 @@ import { useSyncStore, syncEngine } from '../../services/sync/syncEngine';
 
 export const AuthControls: React.FC = () => {
   const { isLoaded, isSignedIn, user } = useUser();
+  const { getToken } = useAuth();
   const { setUser, providerType } = useSyncStore();
 
   useEffect(() => {
@@ -16,12 +18,32 @@ export const AuthControls: React.FC = () => {
       const currentUserId = isSignedIn && user ? user.id : null;
       setUser(currentUserId);
 
+      if (isSignedIn) {
+        // Подключаем мост авторизации Clerk -> Supabase с авто-обновлением токена
+        syncEngine.setAuthTokenProvider(async () => {
+          try {
+            // Пробуем получить JWT по шаблону 'supabase', если он создан в Clerk Dashboard
+            const supabaseToken = await getToken({ template: 'supabase' });
+            if (supabaseToken) return supabaseToken;
+          } catch {
+            // fallback к стандартному токену сессии
+          }
+          try {
+            return await getToken();
+          } catch {
+            return null;
+          }
+        });
+      } else {
+        syncEngine.setAuthTokenProvider(null);
+      }
+
       // При первом входе автоматически запускаем синхронизацию
       if (currentUserId && providerType !== 'local') {
         syncEngine.syncAll();
       }
     }
-  }, [isLoaded, isSignedIn, user, setUser, providerType]);
+  }, [isLoaded, isSignedIn, user, getToken, setUser, providerType]);
 
   if (!isLoaded) {
     return (

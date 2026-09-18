@@ -5,6 +5,7 @@ import { TextBlock } from '../../types/textblock';
 import { Camera, ViewportSize } from '../../types/canvas';
 import { Viewport } from '../../canvas/engine/Viewport';
 import { useCanvasStore } from '../../store/useCanvasStore';
+import { globalCommandStack } from '../../canvas/history/CommandStack';
 
 interface TextBlockViewProps {
   block: TextBlock;
@@ -137,6 +138,21 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       } catch {
         // ignore
       }
+      if (block.x !== dragStart.blockX || block.y !== dragStart.blockY) {
+        const finalX = block.x;
+        const finalY = block.y;
+        const initialX = dragStart.blockX;
+        const initialY = dragStart.blockY;
+        globalCommandStack.execute({
+          execute: () => {
+            updateTextBlock(block.id, { x: finalX, y: finalY });
+          },
+          undo: () => {
+            updateTextBlock(block.id, { x: initialX, y: initialY });
+          },
+          description: 'Перемещение контейнера',
+        });
+      }
     }
   };
 
@@ -169,6 +185,19 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         (e.target as HTMLElement).releasePointerCapture(e.pointerId);
       } catch {
         // ignore
+      }
+      if (block.width !== resizeStart.initialWidth) {
+        const finalWidth = block.width;
+        const initialWidth = resizeStart.initialWidth;
+        globalCommandStack.execute({
+          execute: () => {
+            updateTextBlock(block.id, { width: finalWidth });
+          },
+          undo: () => {
+            updateTextBlock(block.id, { width: initialWidth });
+          },
+          description: 'Изменение ширины контейнера',
+        });
       }
     }
   };
@@ -343,7 +372,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
     // Авто-удаление пустого блока (OneNote поведение)
     // Сохраняет блоки с таблицами, выносками, картинками, формулами даже без текста
     if (isBlockEmpty(contentRef.current)) {
-      removeTextBlock(block.id, true);
+      removeTextBlock(block.id);
       return;
     }
 
@@ -387,7 +416,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
           className="btn-delete-block"
           onClick={(e) => {
             e.stopPropagation();
-            removeTextBlock(block.id, false);
+            removeTextBlock(block.id);
           }}
           title="Удалить контейнер"
         >

@@ -3,8 +3,20 @@ import { ISyncProvider, CloudPullResult } from './types';
 import { Notebook, Section, Page } from '../../types/notebook';
 import { Stroke, ShapeObject } from '../../types/canvas';
 import { TextBlock } from '../../types/textblock';
-import { compressJson, decompressJson } from './compression';
+import { compressBatch, decompressBatch, decompressJson } from './compression';
 
+/**
+ * TursoProvider — реализация облачной синхронизации на базе Turso (libSQL/SQLite).
+ *
+ * МОДЕЛЬ БЕЗОПАСНОСТИ И ИЗОЛЯЦИИ ДАННЫХ:
+ * SQLite и протокол libSQL/HRANA не предоставляют встроенного механизма Row Level Security (RLS)
+ * на уровне движка базы данных. Вся изоляция данных между пользователями является прикладной
+ * (application-level / organizational security):
+ * 1. Во ВСЕХ запросах (SELECT, INSERT, UPDATE, DELETE) фильтр `WHERE user_id = ?` и значение
+ *    колонки `user_id` строго привязываются к авторизованному `currentUserId` через параметризованные args.
+ * 2. Клиентский токен Turso (VITE_TURSO_AUTH_TOKEN) используется доверенным фронтенд-приложением.
+ * 3. На клиенте исключена возможность подмены user_id или выполнения непараметризованных сырых SQL-запросов.
+ */
 export class TursoProvider implements ISyncProvider {
   name: 'turso' = 'turso';
   private client: Client | null = null;
@@ -116,6 +128,11 @@ export class TursoProvider implements ISyncProvider {
     }
   }
 
+  /**
+   * Пакетное сохранение элементов страницы в Turso.
+   * Все штрихи, фигуры и текстовые блоки страницы упаковываются в единый сжатый бандл (schema_version = 2),
+   * что сокращает число сетевых запросов и SQL-операций в разы.
+   */
   async pushPageElements(
     userId: string,
     pageId: string,
@@ -128,62 +145,19 @@ export class TursoProvider implements ISyncProvider {
     const client = this.getClient();
     const now = Date.now();
 
-    const statements: { sql: string; args: any[] }[] = [];
+    const compressedBatch = await compressBatch(elements);
 
-    if (elements.strokes) {
-      for (const stroke of elements.strokes) {
-        const compressed = await compressJson(stroke);
-        statements.push({
-          sql: `
-            INSERT INTO page_elements (id, user_id, page_id, type, data, updated_at, deleted_at)
-            VALUES (?, ?, ?, 'stroke', ?, ?, NULL)
-            ON CONFLICT(id) DO UPDATE SET
-              data = excluded.data,
-              updated_at = excluded.updated_at,
-              deleted_at = NULL;
-          `,
-          args: [stroke.id, userId, pageId, compressed, now],
-        });
-      }
-    }
-
-    if (elements.shapes) {
-      for (const shape of elements.shapes) {
-        const compressed = await compressJson(shape);
-        statements.push({
-          sql: `
-            INSERT INTO page_elements (id, user_id, page_id, type, data, updated_at, deleted_at)
-            VALUES (?, ?, ?, 'shape', ?, ?, NULL)
-            ON CONFLICT(id) DO UPDATE SET
-              data = excluded.data,
-              updated_at = excluded.updated_at,
-              deleted_at = NULL;
-          `,
-          args: [shape.id, userId, pageId, compressed, now],
-        });
-      }
-    }
-
-    if (elements.textBlocks) {
-      for (const block of elements.textBlocks) {
-        const compressed = await compressJson(block);
-        statements.push({
-          sql: `
-            INSERT INTO page_elements (id, user_id, page_id, type, data, updated_at, deleted_at)
-            VALUES (?, ?, ?, 'textBlock', ?, ?, NULL)
-            ON CONFLICT(id) DO UPDATE SET
-              data = excluded.data,
-              updated_at = excluded.updated_at,
-              deleted_at = NULL;
-          `,
-          args: [block.id, userId, pageId, compressed, now],
-        });
-      }
-    }
-
-    if (statements.length > 0) {
-      await client.batch(statements, 'write');
-    }
+    await client.execute({
+      sql: `
+        INSERT INTO page_elements (id, user_id, page_id, type, data, updated_at, deleted_at)
+        VALUES (?, ?, ?, 'bundle', ?, ?, NULL)
+        ON CONFLICT(id) DO UPDATE SET
+          data = excluded.data,
+          updated_at = excluded.updated_at,
+          deleted_at = NULL;
+      `,
+      args: [`bundle_${pageId}`, userId, pageId, compressedBatch, now],
+    });
   }
 
   async pullAll(userId: string, since: number = 0): Promise<CloudPullResult> {
@@ -207,6 +181,59 @@ export class TursoProvider implements ISyncProvider {
         args: [userId, since],
       }),
     ]);
+
+    const parsedElements: CloudPullResult['elements'] = [];
+
+    for (const r of elRes.rows) {
+      const id = String(r.id);
+      const pageId = String(r.page_id);
+      const type = String(r.type);
+      const updatedAt = Number(r.updated_at);
+      const deletedAt = r.deleted_at ? Number(r.deleted_at) : null;
+
+      if (type === 'bundle') {
+        const bundle = await decompressBatch(r.data);
+        for (const stroke of bundle.strokes) {
+          parsedElements.push({
+            id: stroke.id,
+            pageId,
+            type: 'stroke',
+            data: stroke,
+            updatedAt,
+            deletedAt,
+          });
+        }
+        for (const shape of bundle.shapes) {
+          parsedElements.push({
+            id: shape.id,
+            pageId,
+            type: 'shape',
+            data: shape,
+            updatedAt,
+            deletedAt,
+          });
+        }
+        for (const tb of bundle.textBlocks) {
+          parsedElements.push({
+            id: tb.id,
+            pageId,
+            type: 'textBlock',
+            data: tb,
+            updatedAt,
+            deletedAt,
+          });
+        }
+      } else {
+        parsedElements.push({
+          id,
+          pageId,
+          type: type as 'stroke' | 'shape' | 'textBlock',
+          data: await decompressJson(r.data),
+          updatedAt,
+          deletedAt,
+        });
+      }
+    }
 
     return {
       notebooks: nbRes.rows.map((r: any) => ({
@@ -237,16 +264,7 @@ export class TursoProvider implements ISyncProvider {
         background: r.background ? JSON.parse(r.background) : { type: 'grid', color: '#ffffff' },
         deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
       })),
-      elements: await Promise.all(
-        elRes.rows.map(async (r: any) => ({
-          id: String(r.id),
-          pageId: String(r.page_id),
-          type: r.type as 'stroke' | 'shape' | 'textBlock',
-          data: await decompressJson(r.data),
-          updatedAt: Number(r.updated_at),
-          deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
-        }))
-      ),
+      elements: parsedElements,
     };
   }
 

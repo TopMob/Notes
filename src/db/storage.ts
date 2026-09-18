@@ -1,3 +1,10 @@
+/**
+ * АРХИТЕКТУРНЫЙ ИНВАРИАНТ (Local-First):
+ * Локальное хранилище IndexedDB работает ТОЛЬКО с сырыми объектами JavaScript (structured clone).
+ * Здесь НИКОГДА не вызывается compressJson / decompressJson. Это обеспечивает максимальную
+ * производительность (60 FPS) и надёжность при работе на холсте.
+ */
+
 import { getDB } from './idb';
 import { syncEngine } from '../services/sync/syncEngine';
 import { Notebook, Section, Page } from '../types/notebook';
@@ -440,3 +447,90 @@ export async function loadTrash(): Promise<{ sections: Section[]; pages: Page[] 
     pages: allPages.filter((p) => !!p.deletedAt),
   };
 }
+
+export interface FullDatabaseBackup {
+  version: number;
+  exportedAt: number;
+  data: {
+    notebooks: Notebook[];
+    sections: Section[];
+    pages: Page[];
+    strokes: Stroke[];
+    shapes: ShapeObject[];
+    textBlocks: TextBlock[];
+  };
+}
+
+/**
+ * Создание полного оффлайн-бэкапа базы данных в формат JSON.
+ * Гарантирует сохранение всех заметок и рукописных штрихов даже при сбое облака.
+ */
+export async function exportFullBackup(): Promise<string> {
+  const db = await getDB();
+  const notebooks = await db.getAll('notebooks');
+  const sections = await db.getAll('sections');
+  const pages = await db.getAll('pages');
+  const strokes = await db.getAll('strokes');
+  const shapes = await db.getAll('shapes');
+  const textBlocks = await db.getAll('textBlocks');
+
+  const backup: FullDatabaseBackup = {
+    version: 1,
+    exportedAt: Date.now(),
+    data: {
+      notebooks,
+      sections,
+      pages,
+      strokes,
+      shapes,
+      textBlocks,
+    },
+  };
+
+  return JSON.stringify(backup, null, 2);
+}
+
+/**
+ * Восстановление полной базы данных из резервной копии JSON.
+ * Атомарно перезаписывает таблицы в рамках одной транзакции IndexedDB.
+ */
+export async function importFullBackup(backupJson: string): Promise<{ success: boolean; stats: string }> {
+  const parsed = JSON.parse(backupJson);
+  if (!parsed || !parsed.data) {
+    throw new Error('Некорректный формат файла резервной копии');
+  }
+
+  const {
+    notebooks = [],
+    sections = [],
+    pages = [],
+    strokes = [],
+    shapes = [],
+    textBlocks = [],
+  } = parsed.data;
+
+  const db = await getDB();
+  const tx = db.transaction(['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
+
+  await tx.objectStore('notebooks').clear();
+  await tx.objectStore('sections').clear();
+  await tx.objectStore('pages').clear();
+  await tx.objectStore('strokes').clear();
+  await tx.objectStore('shapes').clear();
+  await tx.objectStore('textBlocks').clear();
+
+  for (const nb of notebooks) await tx.objectStore('notebooks').put(nb);
+  for (const sec of sections) await tx.objectStore('sections').put(sec);
+  for (const pg of pages) await tx.objectStore('pages').put(pg);
+  for (const str of strokes) await tx.objectStore('strokes').put(str);
+  for (const sh of shapes) await tx.objectStore('shapes').put(sh);
+  for (const tb of textBlocks) await tx.objectStore('textBlocks').put(tb);
+
+  await tx.done;
+
+  return {
+    success: true,
+    stats: `Восстановлено: ${notebooks.length} блокнотов, ${sections.length} разделов, ${pages.length} страниц, ${strokes.length} штрихов.`,
+  };
+}
+

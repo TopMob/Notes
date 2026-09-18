@@ -1005,14 +1005,10 @@ export const InfiniteCanvas: React.FC = () => {
         if (isDifferent) {
           globalCommandStack.execute({
             execute: () => {
-              useCanvasStore.setState({ strokes: curr });
-              spatialIndex.rebuild([...curr, ...useCanvasStore.getState().shapes]);
-              useCanvasStore.getState().triggerAutosave();
+              useCanvasStore.getState().restoreStrokesWithDirty(curr);
             },
             undo: () => {
-              useCanvasStore.setState({ strokes: prev });
-              spatialIndex.rebuild([...prev, ...useCanvasStore.getState().shapes]);
-              useCanvasStore.getState().triggerAutosave();
+              useCanvasStore.getState().restoreStrokesWithDirty(prev);
             },
             description: 'Стирание ПКМ-ластиком',
           });
@@ -1140,14 +1136,10 @@ export const InfiniteCanvas: React.FC = () => {
         if (isDifferent) {
           globalCommandStack.execute({
             execute: () => {
-              useCanvasStore.setState({ strokes: curr });
-              spatialIndex.rebuild([...curr, ...useCanvasStore.getState().shapes]);
-              useCanvasStore.getState().triggerAutosave();
+              useCanvasStore.getState().restoreStrokesWithDirty(curr);
             },
             undo: () => {
-              useCanvasStore.setState({ strokes: prev });
-              spatialIndex.rebuild([...prev, ...useCanvasStore.getState().shapes]);
-              useCanvasStore.getState().triggerAutosave();
+              useCanvasStore.getState().restoreStrokesWithDirty(prev);
             },
             description: 'Стирание ластиком',
           });

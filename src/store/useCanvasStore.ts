@@ -114,7 +114,9 @@ interface CanvasState {
 
   addTextBlock: (block: TextBlock) => void;
   updateTextBlock: (id: string, updates: Partial<TextBlock>) => void;
+  updateTextBlockWithHistory: (id: string, updates: Partial<TextBlock>, description?: string) => void;
   removeTextBlock: (id: string, skipHistory?: boolean) => void;
+  restoreStrokesWithDirty: (strokes: Stroke[]) => void;
 
   // Настройки пера и палитры
   penCursorStyle: PenCursorStyle;
@@ -425,18 +427,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     removeStroke: (strokeId) => {
-      const pageId = get().currentPageId;
-      set((state) => {
-        const nextStrokes = state.strokes.filter((s) => s.id !== strokeId);
-        spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
-        return { strokes: nextStrokes };
-      });
-      if (pageId) {
-        const d = getOrCreateDirty(pageId);
-        d.strokesDelete.add(strokeId);
-        d.strokesPut.delete(strokeId);
-        scheduleSave(pageId);
-      }
+      get().deleteStrokes([strokeId]);
     },
 
     deleteStrokes: (strokeIds) => {
@@ -483,28 +474,85 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     replaceStrokes: (replacements: Map<string, Stroke[]>) => {
       const pageId = get().currentPageId;
-      set((state) => {
-        const nextStrokes: Stroke[] = [];
-        for (const s of state.strokes) {
-          if (replacements.has(s.id)) {
-            const parts = replacements.get(s.id)!;
-            nextStrokes.push(...parts);
-          } else {
-            nextStrokes.push(s);
+      const previousStrokes = get().strokes.filter((s) => replacements.has(s.id));
+      if (previousStrokes.length === 0) return;
+
+      globalCommandStack.execute({
+        execute: () => {
+          set((state) => {
+            const nextStrokes: Stroke[] = [];
+            for (const s of state.strokes) {
+              if (replacements.has(s.id)) {
+                const parts = replacements.get(s.id)!;
+                nextStrokes.push(...parts);
+              } else {
+                nextStrokes.push(s);
+              }
+            }
+            spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+            return { strokes: nextStrokes };
+          });
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            for (const [oldId, parts] of replacements.entries()) {
+              d.strokesDelete.add(oldId);
+              d.strokesPut.delete(oldId);
+              for (const p of parts) {
+                d.strokesPut.set(p.id, p);
+                d.strokesDelete.delete(p.id);
+              }
+            }
+            scheduleSave(pageId);
           }
-        }
-        spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
-        return { strokes: nextStrokes };
+        },
+        undo: () => {
+          set((state) => {
+            const newPartIds = new Set<string>();
+            for (const parts of replacements.values()) {
+              for (const p of parts) newPartIds.add(p.id);
+            }
+            const filtered = state.strokes.filter((s) => !newPartIds.has(s.id));
+            const restored = [...filtered, ...previousStrokes];
+            spatialIndex.rebuild([...restored, ...state.shapes]);
+            return { strokes: restored };
+          });
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            for (const [oldId, parts] of replacements.entries()) {
+              const original = previousStrokes.find((s) => s.id === oldId);
+              if (original) {
+                d.strokesPut.set(oldId, original);
+                d.strokesDelete.delete(oldId);
+              }
+              for (const p of parts) {
+                d.strokesDelete.add(p.id);
+                d.strokesPut.delete(p.id);
+              }
+            }
+            scheduleSave(pageId);
+          }
+        },
+        description: 'Точечный ластик',
       });
+    },
+
+    restoreStrokesWithDirty: (strokes: Stroke[]) => {
+      const pageId = get().currentPageId;
+      const currentStrokes = get().strokes;
+      const nextStrokeIds = new Set(strokes.map((s) => s.id));
+      const removedIds = currentStrokes.filter((s) => !nextStrokeIds.has(s.id)).map((s) => s.id);
+
+      set({ strokes });
+      spatialIndex.rebuild([...strokes, ...get().shapes]);
       if (pageId) {
         const d = getOrCreateDirty(pageId);
-        for (const [oldId, parts] of replacements.entries()) {
-          d.strokesDelete.add(oldId);
-          d.strokesPut.delete(oldId);
-          for (const p of parts) {
-            d.strokesPut.set(p.id, p);
-            d.strokesDelete.delete(p.id);
-          }
+        for (const s of strokes) {
+          d.strokesPut.set(s.id, s);
+          d.strokesDelete.delete(s.id);
+        }
+        for (const id of removedIds) {
+          d.strokesDelete.add(id);
+          d.strokesPut.delete(id);
         }
         scheduleSave(pageId);
       }
@@ -544,18 +592,39 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     removeShape: (shapeId) => {
+      const targetShape = get().shapes.find((s) => s.id === shapeId);
+      if (!targetShape) return;
       const pageId = get().currentPageId;
-      set((state) => {
-        const nextShapes = state.shapes.filter((s) => s.id !== shapeId);
-        spatialIndex.rebuild([...state.strokes, ...nextShapes]);
-        return { shapes: nextShapes };
+
+      globalCommandStack.execute({
+        execute: () => {
+          set((state) => {
+            const nextShapes = state.shapes.filter((s) => s.id !== shapeId);
+            spatialIndex.rebuild([...state.strokes, ...nextShapes]);
+            return { shapes: nextShapes };
+          });
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.shapesDelete.add(shapeId);
+            d.shapesPut.delete(shapeId);
+            scheduleSave(pageId);
+          }
+        },
+        undo: () => {
+          set((state) => {
+            const nextShapes = [...state.shapes, targetShape];
+            spatialIndex.rebuild([...state.strokes, ...nextShapes]);
+            return { shapes: nextShapes };
+          });
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.shapesPut.set(targetShape.id, targetShape);
+            d.shapesDelete.delete(targetShape.id);
+            scheduleSave(pageId);
+          }
+        },
+        description: 'Удаление фигуры',
       });
-      if (pageId) {
-        const d = getOrCreateDirty(pageId);
-        d.shapesDelete.add(shapeId);
-        d.shapesPut.delete(shapeId);
-        scheduleSave(pageId);
-      }
     },
 
     addTextBlock: (block) => {
@@ -609,23 +678,43 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       }
     },
 
-    removeTextBlock: (id, skipHistory = false) => {
+    updateTextBlockWithHistory: (id, updates, description = 'Изменение заметки') => {
+      const pageId = get().currentPageId;
+      const prevBlock = get().textBlocks.find((b) => b.id === id);
+      if (!prevBlock) return;
+      const nextBlock: TextBlock = { ...prevBlock, ...updates };
+
+      globalCommandStack.execute({
+        execute: () => {
+          set((state) => ({
+            textBlocks: state.textBlocks.map((b) => (b.id === id ? nextBlock : b)),
+          }));
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.textBlocksPut.set(id, nextBlock);
+            d.textBlocksDelete.delete(id);
+            scheduleSave(pageId);
+          }
+        },
+        undo: () => {
+          set((state) => ({
+            textBlocks: state.textBlocks.map((b) => (b.id === id ? prevBlock : b)),
+          }));
+          if (pageId) {
+            const d = getOrCreateDirty(pageId);
+            d.textBlocksPut.set(id, prevBlock);
+            d.textBlocksDelete.delete(id);
+            scheduleSave(pageId);
+          }
+        },
+        description,
+      });
+    },
+
+    removeTextBlock: (id) => {
       const pageId = get().currentPageId;
       const targetBlock = get().textBlocks.find((b) => b.id === id);
       if (!targetBlock) return;
-
-      if (skipHistory) {
-        set((state) => ({
-          textBlocks: state.textBlocks.filter((b) => b.id !== id),
-        }));
-        if (pageId) {
-          const d = getOrCreateDirty(pageId);
-          d.textBlocksDelete.add(id);
-          d.textBlocksPut.delete(id);
-          scheduleSave(pageId);
-        }
-        return;
-      }
 
       globalCommandStack.execute({
         execute: () => {
@@ -640,9 +729,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           }
         },
         undo: () => {
-          set((state) => ({
-            textBlocks: [...state.textBlocks, targetBlock],
-          }));
+          set((state) => {
+            if (state.textBlocks.some((b) => b.id === targetBlock.id)) return state;
+            return { textBlocks: [...state.textBlocks, targetBlock] };
+          });
           if (pageId) {
             const d = getOrCreateDirty(pageId);
             d.textBlocksPut.set(targetBlock.id, targetBlock);
