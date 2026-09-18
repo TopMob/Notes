@@ -45,7 +45,29 @@ export const AuthControls: React.FC = () => {
     }
   }, [isLoaded, isSignedIn, user, getToken, setUser, providerType]);
 
+  const [loadTimedOut, setLoadTimedOut] = React.useState(false);
+
+  useEffect(() => {
+    if (!isLoaded) {
+      const timer = setTimeout(() => setLoadTimedOut(true), 4000);
+      return () => clearTimeout(timer);
+    } else {
+      setLoadTimedOut(false);
+    }
+  }, [isLoaded]);
+
   if (!isLoaded) {
+    if (loadTimedOut) {
+      return (
+        <div
+          className="auth-placeholder"
+          title="Не удалось загрузить модуль Clerk. Проверьте ключ VITE_CLERK_PUBLISHABLE_KEY (в режиме Production требуется собственный домен или настроенный прокси)."
+          style={{ fontSize: '12px', color: '#b45309', padding: '0 6px', cursor: 'help' }}
+        >
+          <span>Авторизация не загрузилась</span>
+        </div>
+      );
+    }
     return (
       <div className="auth-placeholder">
         <div className="auth-spinner" />
