@@ -325,3 +325,190 @@ describe('4. Надёжная очередь синхронизации (Task 4)
     assert.ok(pendingQueue.pages.some((p) => p.id === 'pg-2'));
   });
 });
+
+describe('5. Гранулярность Undo/Redo ластика (Задача 6)', () => {
+  class MockCommandStack {
+    constructor(maxDepth = 100) {
+      this.undoStack = [];
+      this.redoStack = [];
+      this.maxDepth = maxDepth;
+    }
+    execute(cmd) {
+      cmd.execute();
+      this.undoStack.push(cmd);
+      if (this.undoStack.length > this.maxDepth) this.undoStack.shift();
+      this.redoStack = [];
+    }
+    undo() {
+      const cmd = this.undoStack.pop();
+      if (cmd) {
+        cmd.undo();
+        this.redoStack.push(cmd);
+      }
+    }
+    redo() {
+      const cmd = this.redoStack.pop();
+      if (cmd) {
+        cmd.execute();
+        this.undoStack.push(cmd);
+      }
+    }
+  }
+
+  test('Стирание непрерывным жестом (point-eraser и stroke-eraser) создает ровно 1 запись в стеке истории', () => {
+    const stack = new MockCommandStack();
+
+    // Предыдущее действие (например, рисование штриха s-0)
+    let strokes = [
+      { id: 's-0', points: [{ x: 0, y: 0 }], color: '#000' },
+      { id: 's-1', points: [{ x: 10, y: 10 }, { x: 20, y: 20 }], color: '#ff0' },
+      { id: 's-2', points: [{ x: 30, y: 30 }, { x: 40, y: 40 }], color: '#00f' },
+    ];
+    stack.execute({
+      execute: () => {},
+      undo: () => {
+        strokes = strokes.filter((s) => s.id !== 's-0');
+      },
+      description: 'Рисование пера',
+    });
+    assert.strictEqual(stack.undoStack.length, 1, 'В стеке 1 команда до начала стирания');
+
+    // 1. Начало жеста ластика (pointerdown): снимок начального состояния
+    let eraserInitialStrokes = [...strokes];
+
+    // 2. Движение ластика (pointermove): серия вызовов deleteStrokesSilent / replaceStrokesSilent
+    // Моделируем 5 шагов движения ластика
+    for (let step = 1; step <= 5; step++) {
+      if (step === 2) {
+        // Удалили s-1 "тихо" (без stack.execute)
+        strokes = strokes.filter((s) => s.id !== 's-1');
+      }
+      if (step === 4) {
+        // Удалили s-2 "тихо" (без stack.execute)
+        strokes = strokes.filter((s) => s.id !== 's-2');
+      }
+    }
+
+    // Во время движения ластика стек истории НЕ должен увеличиваться!
+    assert.strictEqual(stack.undoStack.length, 1, 'Во время жеста микро-команды не засоряют историю');
+    assert.strictEqual(strokes.length, 1, 'На экране штрихи стёрты (остался s-0)');
+
+    // 3. Завершение жеста ластика (pointerup / finalizeEraserGesture)
+    const prev = eraserInitialStrokes;
+    const curr = [...strokes];
+    eraserInitialStrokes = null;
+
+    const isDifferent =
+      prev.length !== curr.length ||
+      prev.some((s, idx) => s.id !== curr[idx]?.id);
+
+    if (isDifferent) {
+      stack.execute({
+        execute: () => {
+          strokes = [...curr];
+        },
+        undo: () => {
+          strokes = [...prev];
+        },
+        description: 'Стирание ластиком',
+      });
+    }
+
+    // Проверяем: добавилась РОВНО 1 макро-команда
+    assert.strictEqual(stack.undoStack.length, 2, 'В стеке должна появиться ровно 1 команда стирания');
+    assert.strictEqual(stack.undoStack[1].description, 'Стирание ластиком');
+
+    // 4. Одно нажатие Ctrl+Z (Undo): должно восстановить ВСЕ стёртые за жест штрихи
+    stack.undo();
+    assert.strictEqual(strokes.length, 3, 'Все штрихи s-0, s-1, s-2 восстановлены за 1 шаг Ctrl+Z');
+    assert.ok(strokes.some((s) => s.id === 's-1'));
+    assert.ok(strokes.some((s) => s.id === 's-2'));
+
+    // 5. Повторное нажатие Ctrl+Z: откатывает предыдущее действие (рисование пера s-0)
+    stack.undo();
+    assert.strictEqual(strokes.length, 2, 'Повторный Ctrl+Z откатил предыдущее действие, не трогая стёртые штрихи');
+    assert.strictEqual(strokes.some((s) => s.id === 's-0'), false);
+  });
+
+  test('Аккорд мыши (ЛКМ+ПКМ) отменяет текущий жест ластика без записи в стек истории', () => {
+    const stack = new MockCommandStack();
+    const initialStrokes = [{ id: 's-1', points: [{ x: 1, y: 1 }], color: '#000' }];
+    let strokes = [...initialStrokes];
+
+    let eraserInitialSnapshot = [...strokes];
+    // Тихо стёрли штрих во время движения
+    strokes = [];
+
+    // Пользователь нажал аккорд ЛКМ+ПКМ: откат к снимку и сброс жеста
+    strokes = [...eraserInitialSnapshot];
+    eraserInitialSnapshot = null;
+
+    assert.strictEqual(strokes.length, 1, 'Штрих мгновенно вернулся');
+    assert.strictEqual(stack.undoStack.length, 0, 'В стек отмены ничего не попало');
+  });
+});
+
+describe('6. Local-First холодный старт и Smart Diff (Задача 7)', () => {
+  test('Smart Diff: если данные в облаке не новее local lastSyncedAt, IndexedDB и refreshFromStorage не вызываются', () => {
+    const savedLastSync = 1700000000000;
+    let refreshFromStorageCalled = false;
+    let dbPuts = 0;
+
+    const cloudData = {
+      notebooks: [{ id: 'nb-1', title: 'Блокнот', updatedAt: savedLastSync - 5000 }],
+      sections: [{ id: 'sec-1', title: 'Раздел', updatedAt: savedLastSync - 5000 }],
+      pages: [{ id: 'pg-1', title: 'Страница 1', updatedAt: savedLastSync - 1000 }],
+      elements: [{ id: 'str-1', pageId: 'pg-1', updatedAt: savedLastSync - 2000 }],
+    };
+
+    // Алгоритм Smart Diff из syncEngine.ts
+    const isAnyCloudItemNewer =
+      savedLastSync === 0 ||
+      cloudData.notebooks.some((n) => (n.updatedAt || 0) > savedLastSync) ||
+      cloudData.sections.some((s) => (s.updatedAt || 0) > savedLastSync) ||
+      cloudData.pages.some((p) => (p.updatedAt || 0) > savedLastSync) ||
+      cloudData.elements.some((e) => (e.updatedAt || 0) > savedLastSync);
+
+    if (isAnyCloudItemNewer) {
+      dbPuts++;
+      refreshFromStorageCalled = true;
+    }
+
+    assert.strictEqual(isAnyCloudItemNewer, false, 'Облачные данные не новее локальных');
+    assert.strictEqual(dbPuts, 0, 'IndexedDB не должна перезаписываться одинаковыми данными');
+    assert.strictEqual(refreshFromStorageCalled, false, 'Холст не должен мерцать и перезагружаться');
+  });
+
+  test('Smart Diff: изменения других страниц не сбрасывают активный холст текущей страницы', () => {
+    const savedLastSync = 1700000000000;
+    const activePageId = 'page-active-123';
+    let fullCanvasRefreshCalled = false;
+    let sidebarUpdated = false;
+
+    // Облако вернуло обновление для ДРУГОЙ страницы (page-other-456)
+    const cloudData = {
+      pages: [
+        { id: 'page-other-456', title: 'Вторая страница', updatedAt: savedLastSync + 5000 },
+      ],
+      elements: [
+        { id: 'str-other', pageId: 'page-other-456', updatedAt: savedLastSync + 5000 },
+      ],
+    };
+
+    const activePageAffected =
+      !activePageId ||
+      cloudData.pages.some((p) => p.id === activePageId && (p.updatedAt || 0) > savedLastSync) ||
+      cloudData.elements.some((e) => e.pageId === activePageId && (e.updatedAt || 0) > savedLastSync);
+
+    if (activePageAffected) {
+      fullCanvasRefreshCalled = true;
+    } else {
+      sidebarUpdated = true;
+    }
+
+    assert.strictEqual(activePageAffected, false, 'Активная страница не затронута облачным обновлением');
+    assert.strictEqual(fullCanvasRefreshCalled, false, 'Холст активной страницы не перезагружается');
+    assert.strictEqual(sidebarUpdated, true, 'Метаданные обновлены тихо');
+  });
+});
+

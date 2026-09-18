@@ -40,7 +40,8 @@ export const InfiniteCanvas: React.FC = () => {
     textBlocks,
     textBlockHeights,
     addStroke,
-    deleteStrokes,
+    deleteStrokesSilent,
+    replaceStrokesSilent,
     addShape,
     spatialIndex,
     selectedStrokeIds,
@@ -525,8 +526,8 @@ export const InfiniteCanvas: React.FC = () => {
       }
     }
 
-    if (isRightClickEraserRef.current && eraserInitialStrokesRef.current) {
-      useCanvasStore.setState({ strokes: eraserInitialStrokesRef.current });
+    if (eraserInitialStrokesRef.current) {
+      useCanvasStore.getState().restoreStrokesWithDirty(eraserInitialStrokesRef.current);
       eraserInitialStrokesRef.current = null;
     }
     if (dragInitialSnapshotRef.current) {
@@ -781,7 +782,7 @@ export const InfiniteCanvas: React.FC = () => {
       }
 
       if (modified) {
-        useCanvasStore.getState().replaceStrokes(strokesToReplace);
+        replaceStrokesSilent(strokesToReplace);
       }
     } else {
       // Поштриховой ластик
@@ -799,7 +800,7 @@ export const InfiniteCanvas: React.FC = () => {
       }
 
       if (toDelete.length > 0) {
-        deleteStrokes(toDelete);
+        deleteStrokesSilent(toDelete);
       }
     }
   };
@@ -962,6 +963,29 @@ export const InfiniteCanvas: React.FC = () => {
     }
   };
 
+  const finalizeEraserGesture = useCallback((isRmb: boolean) => {
+    if (!eraserInitialStrokesRef.current) return;
+    const prev = eraserInitialStrokesRef.current;
+    const curr = useCanvasStore.getState().strokes;
+    eraserInitialStrokesRef.current = null;
+
+    const isDifferent =
+      prev.length !== curr.length ||
+      prev.some((s, idx) => s.id !== curr[idx]?.id || s.points.length !== curr[idx]?.points.length);
+
+    if (isDifferent) {
+      globalCommandStack.execute({
+        execute: () => {
+          useCanvasStore.getState().restoreStrokesWithDirty(curr);
+        },
+        undo: () => {
+          useCanvasStore.getState().restoreStrokesWithDirty(prev);
+        },
+        description: isRmb ? 'Стирание ПКМ-ластиком' : 'Стирание ластиком',
+      });
+    }
+  }, []);
+
   const handlePointerUp = (e: React.PointerEvent) => {
     if (panStartRef.current) {
       panStartRef.current = null;
@@ -993,28 +1017,9 @@ export const InfiniteCanvas: React.FC = () => {
 
     // Завершение ПКМ ластика
     if (isRightClickEraserRef.current) {
+      finalizeEraserGesture(true);
       isRightClickEraserRef.current = false;
       isPointerDownRef.current = false;
-      if (eraserInitialStrokesRef.current) {
-        const prev = eraserInitialStrokesRef.current;
-        const curr = useCanvasStore.getState().strokes;
-        const isDifferent =
-          prev.length !== curr.length ||
-          prev.some((s, idx) => s.id !== curr[idx]?.id || s.points.length !== curr[idx]?.points.length);
-
-        if (isDifferent) {
-          globalCommandStack.execute({
-            execute: () => {
-              useCanvasStore.getState().restoreStrokesWithDirty(curr);
-            },
-            undo: () => {
-              useCanvasStore.getState().restoreStrokesWithDirty(prev);
-            },
-            description: 'Стирание ПКМ-ластиком',
-          });
-        }
-        eraserInitialStrokesRef.current = null;
-      }
       renderSelectionAndCursorLayer();
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
@@ -1126,26 +1131,7 @@ export const InfiniteCanvas: React.FC = () => {
 
     // Завершение ластика: фиксируем действие в стеке отмены (Ctrl+Z)
     if (activeTool === 'stroke-eraser' || activeTool === 'point-eraser') {
-      if (eraserInitialStrokesRef.current) {
-        const prev = eraserInitialStrokesRef.current;
-        const curr = useCanvasStore.getState().strokes;
-        const isDifferent =
-          prev.length !== curr.length ||
-          prev.some((s, idx) => s.id !== curr[idx]?.id || s.points.length !== curr[idx]?.points.length);
-
-        if (isDifferent) {
-          globalCommandStack.execute({
-            execute: () => {
-              useCanvasStore.getState().restoreStrokesWithDirty(curr);
-            },
-            undo: () => {
-              useCanvasStore.getState().restoreStrokesWithDirty(prev);
-            },
-            description: 'Стирание ластиком',
-          });
-        }
-        eraserInitialStrokesRef.current = null;
-      }
+      finalizeEraserGesture(false);
       renderSelectionAndCursorLayer();
       return;
     }
@@ -1246,6 +1232,7 @@ export const InfiniteCanvas: React.FC = () => {
       onPointerUp={handlePointerUp}
       onPointerLeave={handlePointerLeave}
       onPointerCancel={handlePointerUp}
+      onLostPointerCapture={handlePointerUp}
       onDoubleClick={handleDoubleClick}
       style={{
         position: 'relative',

@@ -107,7 +107,9 @@ interface CanvasState {
   addStroke: (stroke: Stroke) => void;
   removeStroke: (strokeId: string) => void;
   deleteStrokes: (strokeIds: string[]) => void;
+  deleteStrokesSilent: (strokeIds: string[]) => void;
   replaceStrokes: (replacements: Map<string, Stroke[]>) => void;
+  replaceStrokesSilent: (replacements: Map<string, Stroke[]>) => void;
 
   addShape: (shape: ShapeObject) => void;
   removeShape: (shapeId: string) => void;
@@ -472,6 +474,28 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       });
     },
 
+    deleteStrokesSilent: (strokeIds) => {
+      if (strokeIds.length === 0) return;
+      const idsSet = new Set(strokeIds);
+      const deletedStrokes = get().strokes.filter((s) => idsSet.has(s.id));
+      if (deletedStrokes.length === 0) return;
+      const pageId = get().currentPageId;
+
+      set((state) => {
+        const nextStrokes = state.strokes.filter((s) => !idsSet.has(s.id));
+        spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+        return { strokes: nextStrokes };
+      });
+      if (pageId) {
+        const d = getOrCreateDirty(pageId);
+        for (const id of strokeIds) {
+          d.strokesDelete.add(id);
+          d.strokesPut.delete(id);
+        }
+        scheduleSave(pageId);
+      }
+    },
+
     replaceStrokes: (replacements: Map<string, Stroke[]>) => {
       const pageId = get().currentPageId;
       const previousStrokes = get().strokes.filter((s) => replacements.has(s.id));
@@ -534,6 +558,38 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         },
         description: 'Точечный ластик',
       });
+    },
+
+    replaceStrokesSilent: (replacements: Map<string, Stroke[]>) => {
+      const pageId = get().currentPageId;
+      const previousStrokes = get().strokes.filter((s) => replacements.has(s.id));
+      if (previousStrokes.length === 0) return;
+
+      set((state) => {
+        const nextStrokes: Stroke[] = [];
+        for (const s of state.strokes) {
+          if (replacements.has(s.id)) {
+            const parts = replacements.get(s.id)!;
+            nextStrokes.push(...parts);
+          } else {
+            nextStrokes.push(s);
+          }
+        }
+        spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+        return { strokes: nextStrokes };
+      });
+      if (pageId) {
+        const d = getOrCreateDirty(pageId);
+        for (const [oldId, parts] of replacements.entries()) {
+          d.strokesDelete.add(oldId);
+          d.strokesPut.delete(oldId);
+          for (const p of parts) {
+            d.strokesPut.set(p.id, p);
+            d.strokesDelete.delete(p.id);
+          }
+        }
+        scheduleSave(pageId);
+      }
     },
 
     restoreStrokesWithDirty: (strokes: Stroke[]) => {

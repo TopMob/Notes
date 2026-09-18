@@ -11,6 +11,7 @@ import {
 import { getDB } from '../../db/idb';
 import { Section, Page } from '../../types/notebook';
 import { useNotebookStore } from '../../store/useNotebookStore';
+import { useCanvasStore } from '../../store/useCanvasStore';
 
 interface SyncStoreState {
   providerType: SyncProviderType;
@@ -27,12 +28,20 @@ interface SyncStoreState {
 }
 
 const STORAGE_PROVIDER_KEY = 'onenote_sync_provider';
+const STORAGE_LAST_SYNCED_KEY = 'onenote_last_synced_at';
+
+const getInitialLastSyncedAt = (): number | null => {
+  if (typeof localStorage === 'undefined') return null;
+  const val = localStorage.getItem(STORAGE_LAST_SYNCED_KEY);
+  const num = val ? Number(val) : NaN;
+  return Number.isFinite(num) && num > 0 ? num : null;
+};
 
 export const useSyncStore = create<SyncStoreState>((set) => ({
   providerType: (localStorage.getItem(STORAGE_PROVIDER_KEY) as SyncProviderType) || 'turso',
   status: 'synced',
   userId: null,
-  lastSyncedAt: null,
+  lastSyncedAt: getInitialLastSyncedAt(),
   errorMessage: null,
 
   setProviderType: (type) => {
@@ -41,7 +50,12 @@ export const useSyncStore = create<SyncStoreState>((set) => ({
   },
   setUser: (userId) => set({ userId }),
   setStatus: (status) => set({ status }),
-  setLastSyncedAt: (lastSyncedAt) => set({ lastSyncedAt }),
+  setLastSyncedAt: (lastSyncedAt) => {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_LAST_SYNCED_KEY, String(lastSyncedAt));
+    }
+    set({ lastSyncedAt });
+  },
   setError: (errorMessage) => set({ errorMessage, status: errorMessage ? 'error' : 'synced' }),
 }));
 
@@ -264,6 +278,7 @@ class SyncEngine {
       }
 
       // 2. Стягиваем облако
+      const savedLastSync = useSyncStore.getState().lastSyncedAt || 0;
       const cloudData = await provider.pullAll(userId);
 
       // Если в облаке пусто, а локально уже есть данные пользователя -> пушим локалку в облако
@@ -277,67 +292,114 @@ class SyncEngine {
           await provider.pushPageElements(userId, page.id, data);
         }
       } else {
-        // Если в облаке есть данные, обновляем локальную IndexedDB
-        const db = await getDB();
+        // Smart Diff: проверяем, есть ли реально новые или измененные данные из облака
+        const isAnyCloudItemNewer =
+          savedLastSync === 0 ||
+          cloudData.notebooks.some((n) => (n.updatedAt || 0) > savedLastSync) ||
+          cloudData.sections.some((s) => (s.updatedAt || 0) > savedLastSync) ||
+          cloudData.pages.some((p) => (p.updatedAt || 0) > savedLastSync) ||
+          cloudData.elements.some((e) => (e.updatedAt || 0) > savedLastSync);
 
-        for (const cNb of cloudData.notebooks) {
-          await db.put('notebooks', {
-            id: cNb.id,
-            title: cNb.title,
-            createdAt: cNb.createdAt,
-            order: cNb.order,
-          });
-        }
+        if (isAnyCloudItemNewer) {
+          const db = await getDB();
 
-        for (const cSec of cloudData.sections) {
-          if (cSec.deletedAt) {
-            await db.delete('sections', cSec.id);
-          } else {
-            await db.put('sections', {
-              id: cSec.id,
-              notebookId: cSec.notebookId,
-              title: cSec.title,
-              color: cSec.color,
-              order: cSec.order,
+          for (const cNb of cloudData.notebooks) {
+            await db.put('notebooks', {
+              id: cNb.id,
+              title: cNb.title,
+              createdAt: cNb.createdAt,
+              order: cNb.order,
             });
           }
-        }
 
-        for (const cPg of cloudData.pages) {
-          if (cPg.deletedAt) {
-            await db.delete('pages', cPg.id);
-          } else {
-            await db.put('pages', {
-              id: cPg.id,
-              sectionId: cPg.sectionId || fallbackSecId,
-              title: cPg.title,
-              createdAt: cPg.createdAt,
-              order: cPg.order,
-              camera: cPg.camera,
-              background: cPg.background,
-            });
-          }
-        }
-
-        // Обновляем элементы страниц
-        for (const el of cloudData.elements) {
-          if (el.deletedAt) {
-            if (el.type === 'stroke') await db.delete('strokes', el.id);
-            else if (el.type === 'shape') await db.delete('shapes', el.id);
-            else if (el.type === 'textBlock') await db.delete('textBlocks', el.id);
-          } else {
-            if (el.type === 'stroke') {
-              await db.put('strokes', el.data);
-            } else if (el.type === 'shape') {
-              await db.put('shapes', el.data);
-            } else if (el.type === 'textBlock') {
-              await db.put('textBlocks', el.data);
+          for (const cSec of cloudData.sections) {
+            if (cSec.deletedAt) {
+              await db.delete('sections', cSec.id);
+            } else {
+              await db.put('sections', {
+                id: cSec.id,
+                notebookId: cSec.notebookId,
+                title: cSec.title,
+                color: cSec.color,
+                order: cSec.order,
+              });
             }
           }
-        }
 
-        // Мгновенно обновляем интерфейс и активную страницу без перезагрузки браузера
-        await useNotebookStore.getState().refreshFromStorage();
+          for (const cPg of cloudData.pages) {
+            if (cPg.deletedAt) {
+              await db.delete('pages', cPg.id);
+            } else {
+              await db.put('pages', {
+                id: cPg.id,
+                sectionId: cPg.sectionId || fallbackSecId,
+                title: cPg.title,
+                createdAt: cPg.createdAt,
+                order: cPg.order,
+                camera: cPg.camera,
+                background: cPg.background,
+              });
+            }
+          }
+
+          // Обновляем элементы страниц
+          for (const el of cloudData.elements) {
+            if (el.deletedAt) {
+              if (el.type === 'stroke') await db.delete('strokes', el.id);
+              else if (el.type === 'shape') await db.delete('shapes', el.id);
+              else if (el.type === 'textBlock') await db.delete('textBlocks', el.id);
+            } else {
+              if (el.type === 'stroke') {
+                await db.put('strokes', el.data);
+              } else if (el.type === 'shape') {
+                await db.put('shapes', el.data);
+              } else if (el.type === 'textBlock') {
+                await db.put('textBlocks', el.data);
+              }
+            }
+          }
+
+          // Проверяем, затронули ли облачные изменения активную страницу
+          const activePageId = useCanvasStore.getState().currentPageId;
+          const activePageAffected =
+            !activePageId ||
+            cloudData.pages.some((p) => p.id === activePageId && (p.updatedAt || 0) > savedLastSync) ||
+            cloudData.elements.some((e) => e.pageId === activePageId && (e.updatedAt || 0) > savedLastSync);
+
+          if (activePageAffected) {
+            await useNotebookStore.getState().refreshFromStorage();
+          } else {
+            // Если активная страница не затронута, обновляем только структуру блокнотов в UI без сброса активного холста
+            const nbs = await loadNotebooks();
+            const activeNb = useNotebookStore.getState().activeNotebook || nbs[0] || null;
+            let secs: Section[] = [];
+            let activeSec = useNotebookStore.getState().activeSection;
+            let pgs: Page[] = [];
+            let activePg = useNotebookStore.getState().activePage;
+
+            if (activeNb) {
+              secs = await loadSections(activeNb.id);
+              if (!activeSec || !secs.some((s) => s.id === activeSec?.id)) {
+                activeSec = secs[0] || null;
+              }
+              if (activeSec) {
+                pgs = await loadPages(activeSec.id);
+                if (!activePg || !pgs.some((p) => p.id === activePg?.id)) {
+                  activePg = pgs[0] || null;
+                }
+              }
+            }
+
+            useNotebookStore.setState({
+              notebooks: nbs,
+              activeNotebook: activeNb,
+              sections: secs,
+              activeSection: activeSec,
+              pages: pgs,
+              activePage: activePg,
+            });
+          }
+        }
       }
 
       console.log(
