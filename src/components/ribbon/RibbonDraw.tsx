@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Undo2,
   Redo2,
@@ -18,6 +18,7 @@ import {
   Hand,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
+import { RibbonDropdown } from './RibbonDropdown';
 
 export const RibbonDraw: React.FC = () => {
   const {
@@ -49,6 +50,18 @@ export const RibbonDraw: React.FC = () => {
   const [isWidthMenuOpen, setIsWidthMenuOpen] = useState(false);
   const [isShapeMenuOpen, setIsShapeMenuOpen] = useState(false);
   const [editingColorIndex, setEditingColorIndex] = useState<number | null>(null);
+  const [isTouchDevice, setIsTouchDevice] = useState(false);
+
+  const eraserBtnRef = useRef<HTMLButtonElement>(null);
+  const widthBtnRef = useRef<HTMLButtonElement>(null);
+  const shapeBtnRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const hasTouch = ('maxTouchPoints' in navigator && navigator.maxTouchPoints > 0) || 'ontouchstart' in window;
+      setIsTouchDevice(hasTouch);
+    }
+  }, []);
 
   const hasSelection =
     selectedStrokeIds.length > 0 ||
@@ -110,22 +123,26 @@ export const RibbonDraw: React.FC = () => {
           <span className="tool-btn-label">Лассо</span>
         </button>
 
-        <button
-          className={`tool-btn ${drawWithTouch ? 'active' : ''}`}
-          onClick={toggleDrawWithTouch}
-          title={
-            drawWithTouch
-              ? 'Рисование пальцем (включено): 1 палец рисует, 2 пальца — панорамирование и зум'
-              : 'Рисование пальцем (выключено): 1 палец только двигает холст, рисует только стилус'
-          }
-        >
-          <Hand size={16} />
-          <span className="tool-btn-label">Палец</span>
-        </button>
+        {/* Кнопка "Палец" нужна только на сенсорных экранах (планшеты/телефоны со стилусом) */}
+        {isTouchDevice && (
+          <button
+            className={`tool-btn ${drawWithTouch ? 'active' : ''}`}
+            onClick={toggleDrawWithTouch}
+            title={
+              drawWithTouch
+                ? 'Рисование пальцем (включено): 1 палец рисует, 2 пальца — панорамирование и зум'
+                : 'Режим стилуса (выключено): 1 палец только двигает холст, рисует только стилус'
+            }
+          >
+            <Hand size={16} />
+            <span className="tool-btn-label">Палец</span>
+          </button>
+        )}
 
         {/* Ластик с меню (по умолчанию точечный ластик) */}
         <div className="dropdown-wrapper">
           <button
+            ref={eraserBtnRef}
             className={`tool-btn ${
               activeTool === 'stroke-eraser' || activeTool === 'point-eraser' ? 'active' : ''
             }`}
@@ -145,50 +162,53 @@ export const RibbonDraw: React.FC = () => {
             <ChevronDown size={11} className="chevron" />
           </button>
 
-          {isEraserMenuOpen && (
-            <div className="dropdown-menu" style={{ minWidth: '180px' }}>
-              <button
-                className={`dropdown-item ${activeTool === 'point-eraser' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTool('point-eraser');
-                  setIsEraserMenuOpen(false);
-                }}
-              >
-                <span>Точечный ластик</span>
-              </button>
-              <button
-                className={`dropdown-item ${activeTool === 'stroke-eraser' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTool('stroke-eraser');
-                  setIsEraserMenuOpen(false);
-                }}
-              >
-                <span>Поштриховой ластик</span>
-              </button>
+          <RibbonDropdown
+            isOpen={isEraserMenuOpen}
+            onClose={() => setIsEraserMenuOpen(false)}
+            anchorRef={eraserBtnRef}
+            minWidth={180}
+          >
+            <button
+              className={`dropdown-item ${activeTool === 'point-eraser' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTool('point-eraser');
+                setIsEraserMenuOpen(false);
+              }}
+            >
+              <span>Точечный ластик</span>
+            </button>
+            <button
+              className={`dropdown-item ${activeTool === 'stroke-eraser' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTool('stroke-eraser');
+                setIsEraserMenuOpen(false);
+              }}
+            >
+              <span>Поштриховой ластик</span>
+            </button>
 
-              <div style={{ padding: '6px 12px 6px', borderTop: '1px solid var(--hairline)', marginTop: '4px' }}>
-                <div style={{ fontSize: '11px', color: 'var(--ink-secondary)', marginBottom: '6px' }}>
-                  Размер (и для ПКМ): {eraserSize}px
-                </div>
-                <div style={{ display: 'flex', gap: '4px' }}>
-                  {[8, 16, 24, 36, 48].map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      className={`tool-btn icon-only ${eraserSize === s ? 'active' : ''}`}
-                      style={{ flex: 1, height: '24px', fontSize: '11px' }}
-                      onClick={() => {
-                        setEraserSize(s);
-                        setIsEraserMenuOpen(false);
-                      }}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
+            <div style={{ padding: '6px 12px 6px', borderTop: '1px solid var(--hairline)', marginTop: '4px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--ink-secondary)', marginBottom: '6px' }}>
+                Размер (и для ПКМ): {eraserSize}px
+              </div>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                {[8, 16, 24, 36, 48].map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className={`tool-btn icon-only ${eraserSize === s ? 'active' : ''}`}
+                    style={{ flex: 1, height: '24px', fontSize: '11px' }}
+                    onClick={() => {
+                      setEraserSize(s);
+                      setIsEraserMenuOpen(false);
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
               </div>
             </div>
-          )}
+          </RibbonDropdown>
         </div>
       </div>
 
@@ -275,6 +295,7 @@ export const RibbonDraw: React.FC = () => {
       <div className="toolbar-group">
         <div className="dropdown-wrapper">
           <button
+            ref={widthBtnRef}
             className="tool-btn"
             onClick={() => setIsWidthMenuOpen(!isWidthMenuOpen)}
             title="Толщина пера (кликните для настройки ползунком)"
@@ -284,86 +305,91 @@ export const RibbonDraw: React.FC = () => {
             <ChevronDown size={11} className="chevron" />
           </button>
 
-          {isWidthMenuOpen && (
-            <div className="dropdown-menu width-slider-menu" style={{ minWidth: '220px', padding: '12px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-secondary)' }}>
-                  Толщина линии:
-                </span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <input
-                    type="number"
-                    min="1"
-                    max="50"
-                    value={penWidth}
-                    onChange={(e) => setPenWidth(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
-                    style={{
-                      width: '46px',
-                      padding: '2px 4px',
-                      border: '1px solid var(--color-border)',
-                      borderRadius: '4px',
-                      fontSize: '12px',
-                      textAlign: 'center',
-                      background: 'var(--color-bg-primary)',
-                      color: 'var(--color-text-primary)',
-                    }}
-                  />
-                  <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>px</span>
-                </div>
-              </div>
-
-              {/* Ползунок */}
-              <input
-                type="range"
-                min="1"
-                max="40"
-                step="1"
-                value={penWidth}
-                onChange={(e) => setPenWidth(Number(e.target.value))}
-                style={{ width: '100%', cursor: 'pointer', margin: '6px 0 10px 0' }}
-              />
-
-              {/* Превью линии реальной толщины */}
-              <div
-                style={{
-                  height: '32px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: 'var(--color-bg-secondary)',
-                  borderRadius: '6px',
-                  padding: '0 8px',
-                  overflow: 'hidden',
-                }}
-              >
-                <div
+          <RibbonDropdown
+            isOpen={isWidthMenuOpen}
+            onClose={() => setIsWidthMenuOpen(false)}
+            anchorRef={widthBtnRef}
+            className="width-slider-menu"
+            minWidth={220}
+            style={{ padding: '12px' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                Толщина линии:
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={penWidth}
+                  onChange={(e) => setPenWidth(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
                   style={{
-                    height: `${Math.min(28, penWidth)}px`,
-                    width: '100%',
-                    backgroundColor: penColor,
-                    borderRadius: `${penWidth / 2}px`,
+                    width: '46px',
+                    padding: '2px 4px',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: '4px',
+                    fontSize: '12px',
+                    textAlign: 'center',
+                    background: 'var(--color-bg-primary)',
+                    color: 'var(--color-text-primary)',
                   }}
                 />
-              </div>
-
-              {/* Быстрые пресеты */}
-              <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
-                {[1, 3, 5, 8, 16, 24].map((w) => (
-                  <button
-                    key={w}
-                    className={`tool-btn icon-only ${penWidth === w ? 'active' : ''}`}
-                    style={{ flex: 1, height: '24px', fontSize: '11px' }}
-                    onClick={() => {
-                      setPenWidth(w);
-                      setIsWidthMenuOpen(false);
-                    }}
-                  >
-                    {w}
-                  </button>
-                ))}
+                <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>px</span>
               </div>
             </div>
-          )}
+
+            {/* Ползунок */}
+            <input
+              type="range"
+              min="1"
+              max="40"
+              step="1"
+              value={penWidth}
+              onChange={(e) => setPenWidth(Number(e.target.value))}
+              style={{ width: '100%', cursor: 'pointer', margin: '6px 0 10px 0' }}
+            />
+
+            {/* Превью линии реальной толщины */}
+            <div
+              style={{
+                height: '32px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'var(--color-bg-secondary)',
+                borderRadius: '6px',
+                padding: '0 8px',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  height: `${Math.min(28, penWidth)}px`,
+                  width: '100%',
+                  backgroundColor: penColor,
+                  borderRadius: `${penWidth / 2}px`,
+                }}
+              />
+            </div>
+
+            {/* Быстрые пресеты */}
+            <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
+              {[1, 3, 5, 8, 16, 24].map((w) => (
+                <button
+                  key={w}
+                  className={`tool-btn icon-only ${penWidth === w ? 'active' : ''}`}
+                  style={{ flex: 1, height: '24px', fontSize: '11px' }}
+                  onClick={() => {
+                    setPenWidth(w);
+                    setIsWidthMenuOpen(false);
+                  }}
+                >
+                  {w}
+                </button>
+              ))}
+            </div>
+          </RibbonDropdown>
         </div>
       </div>
 
@@ -373,6 +399,7 @@ export const RibbonDraw: React.FC = () => {
       <div className="toolbar-group">
         <div className="dropdown-wrapper">
           <button
+            ref={shapeBtnRef}
             className={`tool-btn ${activeTool === 'shape' ? 'active' : ''}`}
             onClick={() => {
               if (activeTool !== 'shape') setActiveTool('shape');
@@ -389,65 +416,68 @@ export const RibbonDraw: React.FC = () => {
             <ChevronDown size={11} className="chevron" />
           </button>
 
-          {isShapeMenuOpen && (
-            <div className="dropdown-menu">
-              <button
-                className={`dropdown-item ${shapeType === 'line' ? 'active' : ''}`}
-                onClick={() => {
-                  setShapeType('line');
-                  setActiveTool('shape');
-                  setIsShapeMenuOpen(false);
-                }}
-              >
-                <Minus size={15} />
-                <span>Прямая линия</span>
-              </button>
-              <button
-                className={`dropdown-item ${shapeType === 'arrow' ? 'active' : ''}`}
-                onClick={() => {
-                  setShapeType('arrow');
-                  setActiveTool('shape');
-                  setIsShapeMenuOpen(false);
-                }}
-              >
-                <ArrowUpRight size={15} />
-                <span>Стрелка</span>
-              </button>
-              <button
-                className={`dropdown-item ${shapeType === 'rect' ? 'active' : ''}`}
-                onClick={() => {
-                  setShapeType('rect');
-                  setActiveTool('shape');
-                  setIsShapeMenuOpen(false);
-                }}
-              >
-                <Square size={15} />
-                <span>Прямоугольник</span>
-              </button>
-              <button
-                className={`dropdown-item ${shapeType === 'ellipse' ? 'active' : ''}`}
-                onClick={() => {
-                  setShapeType('ellipse');
-                  setActiveTool('shape');
-                  setIsShapeMenuOpen(false);
-                }}
-              >
-                <Circle size={15} />
-                <span>Эллипс</span>
-              </button>
-              <button
-                className={`dropdown-item ${shapeType === 'axis' ? 'active' : ''}`}
-                onClick={() => {
-                  setShapeType('axis');
-                  setActiveTool('shape');
-                  setIsShapeMenuOpen(false);
-                }}
-              >
-                <SplitSquareVertical size={15} />
-                <span>Оси координат X/Y</span>
-              </button>
-            </div>
-          )}
+          <RibbonDropdown
+            isOpen={isShapeMenuOpen}
+            onClose={() => setIsShapeMenuOpen(false)}
+            anchorRef={shapeBtnRef}
+            minWidth={180}
+          >
+            <button
+              className={`dropdown-item ${shapeType === 'line' ? 'active' : ''}`}
+              onClick={() => {
+                setShapeType('line');
+                setActiveTool('shape');
+                setIsShapeMenuOpen(false);
+              }}
+            >
+              <Minus size={15} />
+              <span>Прямая линия</span>
+            </button>
+            <button
+              className={`dropdown-item ${shapeType === 'arrow' ? 'active' : ''}`}
+              onClick={() => {
+                setShapeType('arrow');
+                setActiveTool('shape');
+                setIsShapeMenuOpen(false);
+              }}
+            >
+              <ArrowUpRight size={15} />
+              <span>Стрелка</span>
+            </button>
+            <button
+              className={`dropdown-item ${shapeType === 'rect' ? 'active' : ''}`}
+              onClick={() => {
+                setShapeType('rect');
+                setActiveTool('shape');
+                setIsShapeMenuOpen(false);
+              }}
+            >
+              <Square size={15} />
+              <span>Прямоугольник</span>
+            </button>
+            <button
+              className={`dropdown-item ${shapeType === 'ellipse' ? 'active' : ''}`}
+              onClick={() => {
+                setShapeType('ellipse');
+                setActiveTool('shape');
+                setIsShapeMenuOpen(false);
+              }}
+            >
+              <Circle size={15} />
+              <span>Эллипс</span>
+            </button>
+            <button
+              className={`dropdown-item ${shapeType === 'axis' ? 'active' : ''}`}
+              onClick={() => {
+                setShapeType('axis');
+                setActiveTool('shape');
+                setIsShapeMenuOpen(false);
+              }}
+            >
+              <SplitSquareVertical size={15} />
+              <span>Оси координат X/Y</span>
+            </button>
+          </RibbonDropdown>
         </div>
 
         {/* Кнопка удаления выделенного */}

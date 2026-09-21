@@ -63,7 +63,8 @@ export async function initStorage(): Promise<void> {
 
 export async function loadNotebooks(): Promise<Notebook[]> {
   const db = await getDB();
-  return db.getAllFromIndex('notebooks', 'by-order');
+  const notebooks = await db.getAllFromIndex('notebooks', 'by-order');
+  return notebooks.filter((nb) => !nb.deletedAt);
 }
 
 export async function loadSections(notebookId: string): Promise<Section[]> {
@@ -287,6 +288,57 @@ export async function updatePageMetadata(
     await db.put('pages', updated);
     syncEngine.notifyChange({ pages: [updated] });
   }
+}
+
+export async function createNotebook(notebook: Notebook): Promise<void> {
+  const db = await getDB();
+  await db.put('notebooks', notebook);
+  syncEngine.notifyChange({ notebooks: [notebook] });
+}
+
+export async function renameNotebook(notebookId: string, title: string): Promise<void> {
+  const db = await getDB();
+  const nb = await db.get('notebooks', notebookId);
+  if (nb) {
+    nb.title = title;
+    nb.updatedAt = Date.now();
+    await db.put('notebooks', nb);
+    syncEngine.notifyChange({ notebooks: [nb] });
+  }
+}
+
+export async function deleteNotebook(notebookId: string): Promise<void> {
+  const db = await getDB();
+  const now = Date.now();
+  const tx = db.transaction(['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
+  const nb = await tx.objectStore('notebooks').get(notebookId);
+  if (nb) {
+    nb.deletedAt = now;
+    nb.updatedAt = now;
+    await tx.objectStore('notebooks').put(nb);
+  }
+  const secs = await tx.objectStore('sections').index('by-notebook').getAll(notebookId);
+  const secIds = secs.map((s) => s.id);
+  const pageIds: string[] = [];
+  for (const s of secs) {
+    s.deletedAt = now;
+    s.updatedAt = now;
+    await tx.objectStore('sections').put(s);
+    const pages = await tx.objectStore('pages').index('by-section').getAll(s.id);
+    for (const p of pages) {
+      p.deletedAt = now;
+      p.updatedAt = now;
+      pageIds.push(p.id);
+      await tx.objectStore('pages').put(p);
+    }
+  }
+  await tx.done;
+
+  syncEngine.notifyDelete({
+    notebookIds: [notebookId],
+    sectionIds: secIds,
+    pageIds,
+  });
 }
 
 export async function createSection(section: Section): Promise<void> {

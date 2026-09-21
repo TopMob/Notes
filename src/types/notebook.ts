@@ -4,7 +4,9 @@ export interface Notebook {
   id: string;
   title: string;
   createdAt: number;
+  updatedAt?: number;
   order: number;
+  deletedAt?: number | null;
 }
 
 export interface Section {
@@ -13,6 +15,7 @@ export interface Section {
   title: string;
   color: string;
   order: number;
+  updatedAt?: number;
   deletedAt?: number | null;
 }
 
@@ -21,6 +24,7 @@ export interface Page {
   sectionId: string;
   title: string;
   createdAt: number;
+  updatedAt?: number;
   order: number;
   camera: Camera;
   background: CanvasBackground;

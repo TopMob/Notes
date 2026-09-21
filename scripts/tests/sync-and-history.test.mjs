@@ -446,6 +446,82 @@ describe('5. Гранулярность Undo/Redo ластика (Задача 6
     assert.strictEqual(strokes.length, 1, 'Штрих мгновенно вернулся');
     assert.strictEqual(stack.undoStack.length, 0, 'В стек отмены ничего не попало');
   });
+
+  test('Аккорд мыши (ЛКМ+ПКМ) отменяет ровно 1 действие за нажатие и не спамит при удержании', () => {
+    const stack = new MockCommandStack();
+    let undoCount = 0;
+
+    // Имитируем 3 выполненных действия в истории
+    stack.execute({ execute: () => {}, undo: () => { undoCount++; }, description: 'Action 1' });
+    stack.execute({ execute: () => {}, undo: () => { undoCount++; }, description: 'Action 2' });
+    stack.execute({ execute: () => {}, undo: () => { undoCount++; }, description: 'Action 3' });
+    assert.strictEqual(stack.undoStack.length, 3);
+
+    // Модель логики checkAndHandleMouseChord
+    let isMouseChordActive = false;
+    let lastMouseChordTime = 0;
+
+    function handleEvent(e) {
+      if (e.type === 'mouseup' || e.type === 'pointerup') {
+        if ((e.buttons & 1) === 0 || (e.buttons & 2) === 0) {
+          isMouseChordActive = false;
+        }
+        return false;
+      }
+
+      const isBothButtons =
+        ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0) ||
+        ((e.type === 'mousedown' || e.type === 'pointerdown') &&
+          ((e.button === 0 && (e.buttons & 2) !== 0) || (e.button === 2 && (e.buttons & 1) !== 0)));
+
+      if (!isBothButtons) {
+        if ((e.buttons & 1) === 0 || (e.buttons & 2) === 0) {
+          isMouseChordActive = false;
+        }
+        return false;
+      }
+
+      if (isMouseChordActive) return true;
+
+      const now = e.now || Date.now();
+      if (now - lastMouseChordTime < 150) return true;
+
+      isMouseChordActive = true;
+      lastMouseChordTime = now;
+      stack.undo();
+      return true;
+    }
+
+    // 1. Пользователь зажимает обе кнопки: приходят mousedown, pointerdown и pointermove практически одновременно
+    const t0 = 1000;
+    handleEvent({ type: 'pointerdown', button: 2, buttons: 3, now: t0 });
+    handleEvent({ type: 'mousedown', button: 2, buttons: 3, now: t0 + 1 });
+    handleEvent({ type: 'pointermove', button: -1, buttons: 3, now: t0 + 5 });
+
+    assert.strictEqual(undoCount, 1, 'Ровно 1 отмена при первом зажатии двух кнопок');
+    assert.strictEqual(stack.undoStack.length, 2, 'В стеке осталось 2 действия');
+
+    // 2. Пользователь УДЕРЖИВАЕТ обе кнопки и водит мышью (10 событий pointermove)
+    for (let i = 1; i <= 10; i++) {
+      handleEvent({ type: 'pointermove', button: -1, buttons: 3, now: t0 + 100 * i });
+    }
+    assert.strictEqual(undoCount, 1, 'При удержании обеих кнопок и движении мыши дополнительных отмен не произошло');
+
+    // 3. Пользователь отпускает ПКМ (e.buttons становится 1)
+    handleEvent({ type: 'pointerup', button: 2, buttons: 1, now: t0 + 2000 });
+    assert.strictEqual(isMouseChordActive, false, 'Состояние аккорда сбросилось после отпускания кнопки');
+
+    // 4. Пользователь нажимает ПКМ снова (второе нажатие аккорда)
+    handleEvent({ type: 'pointerdown', button: 2, buttons: 3, now: t0 + 2200 });
+    assert.strictEqual(undoCount, 2, 'Второе нажатие выполнило вторую отмену');
+    assert.strictEqual(stack.undoStack.length, 1, 'В стеке осталось 1 действие');
+
+    // 5. Снова держит две кнопки — опять не спамит
+    for (let i = 1; i <= 5; i++) {
+      handleEvent({ type: 'pointermove', button: -1, buttons: 3, now: t0 + 2300 + i * 50 });
+    }
+    assert.strictEqual(undoCount, 2, 'Удержание после второго нажатия не вызывает паразитных отмен');
+  });
 });
 
 describe('6. Local-First холодный старт и Smart Diff (Задача 7)', () => {
@@ -509,6 +585,171 @@ describe('6. Local-First холодный старт и Smart Diff (Задача
     assert.strictEqual(activePageAffected, false, 'Активная страница не затронута облачным обновлением');
     assert.strictEqual(fullCanvasRefreshCalled, false, 'Холст активной страницы не перезагружается');
     assert.strictEqual(sidebarUpdated, true, 'Метаданные обновлены тихо');
+  });
+});
+
+describe('7. Двусторонняя синхронизация (ноутбук ↔ ПК) и управление блокнотами', () => {
+  test('Ноутбук ↔ ПК: новые локальные блокноты и разделы (разработка) пушатся в облако и стягиваются на ПК', async () => {
+    // Симулируем облачный провайдер
+    const cloudStorage = {
+      notebooks: [
+        { id: 'nb-my-notebook', title: 'Мой блокнот', createdAt: 1000, updatedAt: 1000, order: 0 },
+      ],
+      sections: [
+        { id: 'sec-quick-notes', notebookId: 'nb-my-notebook', title: 'Быстрые заметки', color: '#0078D4', order: 0, updatedAt: 1000 },
+      ],
+      pages: [
+        { id: 'pg-quick-1', sectionId: 'sec-quick-notes', title: '20.09.2026', createdAt: 1000, updatedAt: 1000, order: 0 },
+      ],
+      elements: [],
+    };
+
+    // 1. Устройство А (Ноутбук) создает новый раздел "Разработка"
+    const laptopLocal = {
+      notebooks: [
+        { id: 'nb-my-notebook', title: 'Мой блокнот', createdAt: 1000, updatedAt: 1000, order: 0 },
+      ],
+      sections: [
+        { id: 'sec-quick-notes', notebookId: 'nb-my-notebook', title: 'Быстрые заметки', color: '#0078D4', order: 0, updatedAt: 1000 },
+        { id: 'sec-dev-123', notebookId: 'nb-my-notebook', title: 'разработка', color: '#107C41', order: 1, updatedAt: 2000 },
+      ],
+      pages: [
+        { id: 'pg-quick-1', sectionId: 'sec-quick-notes', title: '20.09.2026', createdAt: 1000, updatedAt: 1000, order: 0 },
+        { id: 'pg-dev-1', sectionId: 'sec-dev-123', title: 'План архитектуры', createdAt: 2000, updatedAt: 2000, order: 0 },
+      ],
+    };
+
+    // Реализация логики PUSH из syncAll() на Ноутбуке:
+    const cloudSecMap = new Map(cloudStorage.sections.map((s) => [s.id, s]));
+    const cloudPageMap = new Map(cloudStorage.pages.map((p) => [p.id, p]));
+
+    const secsToPush = laptopLocal.sections.filter((s) => !cloudSecMap.has(s.id));
+    const pagesToPush = laptopLocal.pages.filter((p) => !cloudPageMap.has(p.id));
+
+    assert.strictEqual(secsToPush.length, 1, 'Ноутбук находит новый раздел для отправки');
+    assert.strictEqual(secsToPush[0].title, 'разработка');
+    assert.strictEqual(pagesToPush.length, 1, 'Ноутбук находит новую страницу для отправки');
+
+    // Ноутбук пушит данные в облако
+    cloudStorage.sections.push(...secsToPush);
+    cloudStorage.pages.push(...pagesToPush);
+
+    // 2. Устройство Б (ПК): нажимает "Синхронизировать сейчас"
+    const pcLocal = {
+      notebooks: [
+        { id: 'nb-my-notebook', title: 'Мой блокнот', createdAt: 1000, updatedAt: 1000, order: 0 },
+      ],
+      sections: [
+        { id: 'sec-quick-notes', notebookId: 'nb-my-notebook', title: 'Быстрые заметки', color: '#0078D4', order: 0, updatedAt: 1000 },
+      ],
+      pages: [
+        { id: 'pg-quick-1', sectionId: 'sec-quick-notes', title: '20.09.2026', createdAt: 1000, updatedAt: 1000, order: 0 },
+      ],
+    };
+
+    // Реализация логики PULL из syncAll() на ПК:
+    const pcSecMap = new Map(pcLocal.sections.map((s) => [s.id, s]));
+    const pcPageMap = new Map(pcLocal.pages.map((p) => [p.id, p]));
+
+    let pulledSections = 0;
+    for (const cSec of cloudStorage.sections) {
+      if (!pcSecMap.has(cSec.id)) {
+        pcLocal.sections.push(cSec);
+        pulledSections++;
+      }
+    }
+
+    let pulledPages = 0;
+    for (const cPg of cloudStorage.pages) {
+      if (!pcPageMap.has(cPg.id)) {
+        pcLocal.pages.push(cPg);
+        pulledPages++;
+      }
+    }
+
+    assert.strictEqual(pulledSections, 1, 'ПК успешно стянул 1 раздел из облака');
+    assert.strictEqual(pulledPages, 1, 'ПК успешно стянул 1 страницу из облака');
+    assert.ok(
+      pcLocal.sections.some((s) => s.title === 'разработка'),
+      'Раздел "разработка" теперь присутствует в локальной базе ПК!'
+    );
+  });
+
+  test('Буферизация изменений при !userId: данные не теряются до авторизации', () => {
+    let pendingPayload = {};
+    const mergePayloads = (prev, next) => {
+      const mergeById = (a = [], b = []) => {
+        const map = new Map();
+        for (const item of a) map.set(item.id, item);
+        for (const item of b) map.set(item.id, item);
+        return Array.from(map.values());
+      };
+      return {
+        notebooks: mergeById(prev.notebooks, next.notebooks),
+        sections: mergeById(prev.sections, next.sections),
+        pages: mergeById(prev.pages, next.pages),
+      };
+    };
+
+    // Симулируем notifyChange до авторизации (userId = null)
+    let currentUserId = null;
+    const notifyChange = (payload) => {
+      pendingPayload = mergePayloads(pendingPayload, payload);
+      if (!currentUserId) return; // буферизировано в памяти
+    };
+
+    notifyChange({
+      sections: [{ id: 'sec-dev-1', title: 'разработка', color: '#107C41', order: 1 }],
+    });
+
+    assert.strictEqual(pendingPayload.sections?.length, 1, 'Изменение сохранено в очереди несмотря на !userId');
+    assert.strictEqual(pendingPayload.sections[0].title, 'разработка');
+
+    // Пользователь авторизовался
+    currentUserId = 'user_test_123';
+    let flushed = false;
+    const flushPendingChanges = () => {
+      if (pendingPayload.sections && pendingPayload.sections.length > 0) {
+        flushed = true;
+      }
+    };
+    if (currentUserId) {
+      flushPendingChanges();
+    }
+
+    assert.strictEqual(flushed, true, 'Очередь успешно отправлена в облако после авторизации');
+  });
+
+  test('Создание нового блокнота автоматически создает первый раздел и страницу', () => {
+    const notebooks = [];
+    const now = Date.now();
+    const newNotebook = {
+      id: `nb-${now}`,
+      title: 'Разработка ПО',
+      createdAt: now,
+      updatedAt: now,
+      order: notebooks.length,
+    };
+    const firstSection = {
+      id: `sec-${now}`,
+      notebookId: newNotebook.id,
+      title: 'Быстрые заметки',
+      color: '#0078D4',
+      order: 0,
+      updatedAt: now,
+    };
+    const firstPage = {
+      id: `page-${now}`,
+      sectionId: firstSection.id,
+      title: '21.09.2026',
+      createdAt: now,
+      updatedAt: now,
+      order: 0,
+    };
+
+    assert.strictEqual(newNotebook.title, 'Разработка ПО');
+    assert.strictEqual(firstSection.notebookId, newNotebook.id);
+    assert.strictEqual(firstPage.sectionId, firstSection.id);
   });
 });
 

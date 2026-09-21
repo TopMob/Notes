@@ -45,9 +45,25 @@ export const CloudSettingsModal: React.FC = () => {
     setIsManualSyncing(true);
     setSyncSuccessMsg(null);
     try {
-      await syncEngine.syncAll();
-      setSyncSuccessMsg('Синхронизация успешно завершена!');
-      setTimeout(() => setSyncSuccessMsg(null), 3000);
+      const stats = await syncEngine.syncAll();
+      const pushedTotal = stats.pushed.notebooks + stats.pushed.sections + stats.pushed.pages;
+      const pulledTotal = stats.pulled.notebooks + stats.pulled.sections + stats.pulled.pages;
+
+      let msg = 'Синхронизация завершена!';
+      if (pushedTotal > 0 || pulledTotal > 0) {
+        const parts: string[] = [];
+        if (pushedTotal > 0) {
+          parts.push(`отправлено: ${pushedTotal}`);
+        }
+        if (pulledTotal > 0) {
+          parts.push(`получено: ${pulledTotal}`);
+        }
+        msg = `Успешно: ${parts.join(', ')}`;
+      } else {
+        msg = 'Все блокноты, разделы и страницы уже синхронизированы!';
+      }
+      setSyncSuccessMsg(msg);
+      setTimeout(() => setSyncSuccessMsg(null), 6000);
     } catch (e: any) {
       // Ошибка отобразится через store
     } finally {
@@ -134,11 +150,11 @@ export const CloudSettingsModal: React.FC = () => {
               <div className="provider-info">
                 <div className="provider-header">
                   <span className="provider-name">Turso Cloud (libSQL / SQLite)</span>
-                  <span className="badge-recommended">Быстро</span>
+                  <span className="badge-recommended">Рекомендуется</span>
                   {providerType === 'turso' && <span className="active-pill">Активно</span>}
                 </div>
                 <p className="provider-desc">
-                  Ультрабыстрый бессерверный SQLite. Мгновенный отклик, 9 ГБ хранилища в облаке.
+                  Ультрабыстрый бессерверный SQLite. Мгновенная синхронизация без задержек, стабильно работает во всех сетях и регионах.
                 </p>
               </div>
             </div>
@@ -157,7 +173,7 @@ export const CloudSettingsModal: React.FC = () => {
                   {providerType === 'supabase' && <span className="active-pill">Активно</span>}
                 </div>
                 <p className="provider-desc">
-                  Надёжная реляционная база Postgres для заметок и будущего медиа-хранилища.
+                  Реляционная база Postgres. Внимание: в некоторых сетях РФ домены Supabase могут блокироваться провайдерами (ошибка соединения / TLS). Для стабильной работы без VPN рекомендуется Turso.
                 </p>
               </div>
             </div>

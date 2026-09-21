@@ -298,9 +298,16 @@ export class SupabaseProvider implements ISyncProvider {
     };
   }
 
-  async deleteItems(userId: string, item: { sectionIds?: string[]; pageIds?: string[] }): Promise<void> {
+  async deleteItems(userId: string, item: { notebookIds?: string[]; sectionIds?: string[]; pageIds?: string[] }): Promise<void> {
     const client = this.getClient();
     const now = Date.now();
+
+    if (item.notebookIds && item.notebookIds.length > 0) {
+      for (const id of item.notebookIds) {
+        await client.from('notebooks').update({ deleted_at: now, updated_at: now }).eq('id', id).eq('user_id', userId);
+        await client.from('sections').update({ deleted_at: now, updated_at: now }).eq('notebook_id', id).eq('user_id', userId);
+      }
+    }
 
     if (item.sectionIds && item.sectionIds.length > 0) {
       for (const id of item.sectionIds) {

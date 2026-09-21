@@ -5,6 +5,9 @@ import {
   loadNotebooks,
   loadSections,
   loadPages,
+  createNotebook as dbCreateNotebook,
+  renameNotebook as dbRenameNotebook,
+  deleteNotebook as dbDeleteNotebook,
   createSection as dbCreateSection,
   createPage as dbCreatePage,
   deleteSection as dbDeleteSection,
@@ -35,6 +38,9 @@ interface NotebookState {
   // Действия
   init: () => Promise<void>;
   selectNotebook: (notebook: Notebook) => Promise<void>;
+  addNotebook: (title?: string) => Promise<Notebook>;
+  renameNotebook: (notebookId: string, newTitle: string) => Promise<void>;
+  removeNotebook: (notebookId: string) => Promise<void>;
   selectSection: (section: Section) => Promise<void>;
   selectPage: (page: Page) => Promise<void>;
   navigateToPage: (pageId: string) => Promise<void>;
@@ -127,6 +133,95 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
     if (activePage) {
       await useCanvasStore.getState().loadPage(activePage.id, activePage.camera, activePage.background);
+    }
+  },
+
+  addNotebook: async (title = 'Новый блокнот') => {
+    const { notebooks } = get();
+    const cleanTitle = title.trim() || 'Новый блокнот';
+    const now = Date.now();
+    const newNotebook: Notebook = {
+      id: `nb-${now}`,
+      title: cleanTitle,
+      createdAt: now,
+      updatedAt: now,
+      order: notebooks.length,
+    };
+
+    await dbCreateNotebook(newNotebook);
+
+    // Начальный раздел
+    const firstSection: Section = {
+      id: `sec-${now}`,
+      notebookId: newNotebook.id,
+      title: 'Быстрые заметки',
+      color: SECTION_COLORS[0],
+      order: 0,
+      updatedAt: now,
+    };
+    await dbCreateSection(firstSection);
+
+    // Начальная страница
+    const today = new Date();
+    const formattedDate = `${String(today.getDate()).padStart(2, '0')}.${String(
+      today.getMonth() + 1
+    ).padStart(2, '0')}.${today.getFullYear()}`;
+
+    const firstPage: Page = {
+      id: `page-${now}`,
+      sectionId: firstSection.id,
+      title: formattedDate,
+      createdAt: now,
+      updatedAt: now,
+      order: 0,
+      camera: { x: 0, y: 0, zoom: 1 },
+      background: 'plain',
+    };
+    await dbCreatePage(firstPage);
+
+    const updatedNotebooks = [...notebooks, newNotebook];
+    set({
+      notebooks: updatedNotebooks,
+      activeNotebook: newNotebook,
+      sections: [firstSection],
+      activeSection: firstSection,
+      pages: [firstPage],
+      activePage: firstPage,
+    });
+
+    await useCanvasStore.getState().loadPage(firstPage.id, firstPage.camera, firstPage.background);
+
+    return newNotebook;
+  },
+
+  renameNotebook: async (notebookId: string, newTitle: string) => {
+    const cleanTitle = newTitle.trim() || 'Блокнот';
+    await dbRenameNotebook(notebookId, cleanTitle);
+    const now = Date.now();
+    set((state) => ({
+      notebooks: state.notebooks.map((nb) =>
+        nb.id === notebookId ? { ...nb, title: cleanTitle, updatedAt: now } : nb
+      ),
+      activeNotebook:
+        state.activeNotebook?.id === notebookId
+          ? { ...state.activeNotebook, title: cleanTitle, updatedAt: now }
+          : state.activeNotebook,
+    }));
+  },
+
+  removeNotebook: async (notebookId: string) => {
+    await dbDeleteNotebook(notebookId);
+    const { notebooks, activeNotebook } = get();
+    const remaining = notebooks.filter((nb) => nb.id !== notebookId);
+    let nextActive = activeNotebook;
+    if (activeNotebook?.id === notebookId) {
+      nextActive = remaining[0] || null;
+    }
+    set({ notebooks: remaining, activeNotebook: nextActive });
+    if (nextActive) {
+      await get().selectNotebook(nextActive);
+    } else {
+      set({ sections: [], activeSection: null, pages: [], activePage: null });
     }
   },
 
@@ -382,7 +477,8 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
   refreshFromStorage: async () => {
     const notebooks = await loadNotebooks();
-    const activeNb = get().activeNotebook || notebooks[0] || null;
+    const currentActiveNb = get().activeNotebook;
+    const activeNb = notebooks.find((n) => n.id === currentActiveNb?.id) || notebooks[0] || null;
     let sections: Section[] = [];
     let activeSec = get().activeSection;
     let pages: Page[] = [];

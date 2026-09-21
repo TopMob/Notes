@@ -32,6 +32,20 @@ export interface CloudPullResult {
   }[];
 }
 
+export interface SyncStats {
+  pushed: {
+    notebooks: number;
+    sections: number;
+    pages: number;
+  };
+  pulled: {
+    notebooks: number;
+    sections: number;
+    pages: number;
+    elements: number;
+  };
+}
+
 export interface ISyncProvider {
   name: SyncProviderType;
   pushNotebooks(userId: string, notebooks: Notebook[]): Promise<void>;
@@ -47,5 +61,5 @@ export interface ISyncProvider {
     }
   ): Promise<void>;
   pullAll(userId: string, since?: number): Promise<CloudPullResult>;
-  deleteItems(userId: string, item: { sectionIds?: string[]; pageIds?: string[] }): Promise<void>;
+  deleteItems(userId: string, item: { notebookIds?: string[]; sectionIds?: string[]; pageIds?: string[] }): Promise<void>;
 }

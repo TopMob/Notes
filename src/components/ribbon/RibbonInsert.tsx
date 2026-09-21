@@ -6,6 +6,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
+import { RibbonDropdown } from './RibbonDropdown';
 
 export const RibbonInsert: React.FC = () => {
   const {
@@ -24,6 +25,8 @@ export const RibbonInsert: React.FC = () => {
   const [matrixType, setMatrixType] = useState<'pmatrix' | 'bmatrix' | 'vmatrix'>('pmatrix');
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const tableBtnRef = useRef<HTMLButtonElement | null>(null);
+  const matrixBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const toggleDropdown = (name: string) => {
     setActiveDropdown((prev) => {
@@ -133,6 +136,7 @@ export const RibbonInsert: React.FC = () => {
       <div className="toolbar-group">
         <div className="dropdown-wrapper">
           <button
+            ref={tableBtnRef}
             className={`tool-btn ${activeDropdown === 'table' ? 'active' : ''}`}
             onClick={() => toggleDropdown('table')}
             title="Вставить таблицу (выбор размера по сетке)"
@@ -142,10 +146,15 @@ export const RibbonInsert: React.FC = () => {
             <ChevronDown size={11} className="chevron" />
           </button>
 
-          {activeDropdown === 'table' && (
+          <RibbonDropdown
+            isOpen={activeDropdown === 'table'}
+            onClose={closeDropdowns}
+            anchorRef={tableBtnRef}
+            className="word-table-grid-menu"
+            minWidth={200}
+            style={{ padding: '12px' }}
+          >
             <div
-              className="dropdown-menu word-table-grid-menu"
-              style={{ minWidth: '200px', padding: '12px' }}
               onMouseLeave={() => setTableHoverGrid({ r: 0, c: 0 })}
             >
               <div
@@ -212,7 +221,7 @@ export const RibbonInsert: React.FC = () => {
                 )}
               </div>
             </div>
-          )}
+          </RibbonDropdown>
         </div>
       </div>
 
@@ -222,6 +231,7 @@ export const RibbonInsert: React.FC = () => {
       <div className="toolbar-group">
         <div className="dropdown-wrapper">
           <button
+            ref={matrixBtnRef}
             className={`tool-btn ${activeDropdown === 'matrix' ? 'active' : ''}`}
             onClick={() => toggleDropdown('matrix')}
             title="Вставить математическую матрицу"
@@ -231,84 +241,85 @@ export const RibbonInsert: React.FC = () => {
             <ChevronDown size={11} className="chevron" />
           </button>
 
-          {activeDropdown === 'matrix' && (
-            <div
-              className="dropdown-menu"
-              style={{ minWidth: '240px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ink-secondary)' }}>
-                Параметры матрицы:
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '12px' }}>Строк:</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="6"
-                  value={matrixRows}
-                  onChange={(e) => setMatrixRows(Math.max(1, Math.min(6, Number(e.target.value) || 1)))}
-                  style={{
-                    width: '50px',
-                    padding: '2px 6px',
-                    border: '1px solid var(--hairline)',
-                    borderRadius: '4px',
-                    textAlign: 'center',
-                    background: 'var(--bg-app)',
-                    color: 'var(--ink)',
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '12px' }}>Столбцов:</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="6"
-                  value={matrixCols}
-                  onChange={(e) => setMatrixCols(Math.max(1, Math.min(6, Number(e.target.value) || 1)))}
-                  style={{
-                    width: '50px',
-                    padding: '2px 6px',
-                    border: '1px solid var(--hairline)',
-                    borderRadius: '4px',
-                    textAlign: 'center',
-                    background: 'var(--bg-app)',
-                    color: 'var(--ink)',
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '12px' }}>Тип скобок:</span>
-                <select
-                  value={matrixType}
-                  onChange={(e) => setMatrixType(e.target.value as any)}
-                  style={{
-                    padding: '3px 6px',
-                    border: '1px solid var(--hairline)',
-                    borderRadius: '4px',
-                    fontSize: '12px',
-                    background: 'var(--bg-app)',
-                    color: 'var(--ink)',
-                  }}
-                >
-                  <option value="pmatrix">( ) круглые</option>
-                  <option value="bmatrix">[ ] квадратные</option>
-                  <option value="vmatrix">| | определитель</option>
-                </select>
-              </div>
-
-              <button
-                className="tool-btn highlight"
-                onClick={() => insertMatrix(matrixRows, matrixCols, matrixType)}
-                style={{ justifyContent: 'center', marginTop: '4px' }}
-              >
-                Вставить матрицу {matrixRows}×{matrixCols}
-              </button>
+          <RibbonDropdown
+            isOpen={activeDropdown === 'matrix'}
+            onClose={closeDropdowns}
+            anchorRef={matrixBtnRef}
+            minWidth={240}
+            style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}
+          >
+            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ink-secondary)' }}>
+              Параметры матрицы:
             </div>
-          )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '12px' }}>Строк:</span>
+              <input
+                type="number"
+                min="1"
+                max="6"
+                value={matrixRows}
+                onChange={(e) => setMatrixRows(Math.max(1, Math.min(6, Number(e.target.value) || 1)))}
+                style={{
+                  width: '50px',
+                  padding: '2px 6px',
+                  border: '1px solid var(--hairline)',
+                  borderRadius: '4px',
+                  textAlign: 'center',
+                  background: 'var(--bg-app)',
+                  color: 'var(--ink)',
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '12px' }}>Столбцов:</span>
+              <input
+                type="number"
+                min="1"
+                max="6"
+                value={matrixCols}
+                onChange={(e) => setMatrixCols(Math.max(1, Math.min(6, Number(e.target.value) || 1)))}
+                style={{
+                  width: '50px',
+                  padding: '2px 6px',
+                  border: '1px solid var(--hairline)',
+                  borderRadius: '4px',
+                  textAlign: 'center',
+                  background: 'var(--bg-app)',
+                  color: 'var(--ink)',
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '12px' }}>Тип скобок:</span>
+              <select
+                value={matrixType}
+                onChange={(e) => setMatrixType(e.target.value as any)}
+                style={{
+                  padding: '3px 6px',
+                  border: '1px solid var(--hairline)',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  background: 'var(--bg-app)',
+                  color: 'var(--ink)',
+                }}
+              >
+                <option value="pmatrix">( ) круглые</option>
+                <option value="bmatrix">[ ] квадратные</option>
+                <option value="vmatrix">| | определитель</option>
+              </select>
+            </div>
+
+            <button
+              className="tool-btn highlight"
+              onClick={() => insertMatrix(matrixRows, matrixCols, matrixType)}
+              style={{ justifyContent: 'center', marginTop: '4px' }}
+            >
+              Вставить матрицу {matrixRows}×{matrixCols}
+            </button>
+          </RibbonDropdown>
         </div>
       </div>
 

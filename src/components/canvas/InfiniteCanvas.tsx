@@ -80,6 +80,8 @@ export const InfiniteCanvas: React.FC = () => {
   } | null>(null);
   const eraserInitialStrokesRef = useRef<Stroke[] | null>(null);
   const cursorWorldPosRef = useRef<{ x: number; y: number } | null>(null);
+  const isMouseChordActiveRef = useRef(false);
+  const lastMouseChordTimeRef = useRef(0);
 
   // Динамический Resize listener: реагирует на окно и ResizeObserver контейнера
   useEffect(() => {
@@ -454,62 +456,18 @@ export const InfiniteCanvas: React.FC = () => {
     renderSelectionAndCursorLayer();
   }, [renderSelectionAndCursorLayer, selectedStrokeIds, selectedShapeIds, selectedTextBlockIds]);
 
-  // Нативный активный перехват колеса мыши: предотвращает зум всей веб-страницы при Ctrl+Scroll
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const onWheelNative = (e: WheelEvent) => {
-      e.preventDefault();
-
-      if (e.ctrlKey || e.metaKey) {
-        // Zoom относительно позиции курсора мыши
-        const rect = container.getBoundingClientRect();
-        const screenPoint = {
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top,
-        };
-        const factor = e.deltaY < 0 ? 1.08 : 0.92;
-        useCanvasStore.getState().setCamera((prev) =>
-          Viewport.zoomAtPoint(prev, screenPoint, factor, { w: rect.width, h: rect.height })
-        );
-      } else {
-        // Pan холста
-        const curCam = useCanvasStore.getState().camera;
-        useCanvasStore.getState().setCamera((prev) => ({
-          ...prev,
-          x: prev.x + e.deltaX / curCam.zoom,
-          y: prev.y + e.deltaY / curCam.zoom,
-        }));
-      }
-    };
-
-    const onMouseDownNative = (e: MouseEvent) => {
-      const isChord =
-        (e.button === 0 && (e.buttons & 2) !== 0) || // ЛКМ при зажатой ПКМ
-        (e.button === 2 && (e.buttons & 1) !== 0) || // ПКМ при зажатой ЛКМ
-        ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0);
-
-      if (isChord) {
-        triggerMouseChordUndo(e);
-      }
-    };
-
-    container.addEventListener('mousedown', onMouseDownNative, { capture: true });
-    container.addEventListener('wheel', onWheelNative, { passive: false });
-    return () => {
-      container.removeEventListener('mousedown', onMouseDownNative, { capture: true });
-      container.removeEventListener('wheel', onWheelNative);
-    };
-  }, []);
-
-  const triggerMouseChordUndo = (e: React.MouseEvent | MouseEvent | React.PointerEvent) => {
+  const triggerMouseChordUndo = useCallback((e: React.MouseEvent | MouseEvent | React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
 
     // Сбрасываем Pointer Capture
     if (containerRef.current) {
       try {
+        if ('pointerId' in e && typeof e.pointerId === 'number') {
+          if (containerRef.current.hasPointerCapture?.(e.pointerId)) {
+            containerRef.current.releasePointerCapture(e.pointerId);
+          }
+        }
         if (containerRef.current.hasPointerCapture?.(1)) {
           containerRef.current.releasePointerCapture(1);
         }
@@ -548,29 +506,135 @@ export const InfiniteCanvas: React.FC = () => {
 
     useCanvasStore.getState().undo();
     renderSelectionAndCursorLayer();
-  };
+  }, [renderSelectionAndCursorLayer]);
+
+  const checkAndHandleMouseChord = useCallback(
+    (e: React.MouseEvent | MouseEvent | React.PointerEvent): boolean => {
+      // События отпускания кнопки никогда не инициируют аккорд
+      if (e.type === 'mouseup' || e.type === 'pointerup') {
+        if ((e.buttons & 1) === 0 || (e.buttons & 2) === 0) {
+          isMouseChordActiveRef.current = false;
+        }
+        return false;
+      }
+
+      // Проверяем одновременное зажатие обеих кнопок (ЛКМ + ПКМ)
+      const isBothButtons =
+        ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0) ||
+        ((e.type === 'mousedown' || e.type === 'pointerdown') &&
+          ((e.button === 0 && (e.buttons & 2) !== 0) || (e.button === 2 && (e.buttons & 1) !== 0)));
+
+      if (!isBothButtons) {
+        if ((e.buttons & 1) === 0 || (e.buttons & 2) === 0) {
+          isMouseChordActiveRef.current = false;
+        }
+        return false;
+      }
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Если аккорд для этого зажатия уже сработал — повторно не отменяем
+      if (isMouseChordActiveRef.current) {
+        return true;
+      }
+
+      // Защита от аппаратного дребезга контактов и дублирования событий
+      const now = Date.now();
+      if (now - lastMouseChordTimeRef.current < 150) {
+        return true;
+      }
+
+      isMouseChordActiveRef.current = true;
+      lastMouseChordTimeRef.current = now;
+
+      triggerMouseChordUndo(e);
+      return true;
+    },
+    [triggerMouseChordUndo]
+  );
+
+  const checkAndHandleMouseChordRef = useRef(checkAndHandleMouseChord);
+  checkAndHandleMouseChordRef.current = checkAndHandleMouseChord;
+
+  // Нативный активный перехват колеса мыши: предотвращает зум всей веб-страницы при Ctrl+Scroll
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onWheelNative = (e: WheelEvent) => {
+      e.preventDefault();
+
+      if (e.ctrlKey || e.metaKey) {
+        // Zoom относительно позиции курсора мыши
+        const rect = container.getBoundingClientRect();
+        const screenPoint = {
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top,
+        };
+        const factor = e.deltaY < 0 ? 1.08 : 0.92;
+        useCanvasStore.getState().setCamera((prev) =>
+          Viewport.zoomAtPoint(prev, screenPoint, factor, { w: rect.width, h: rect.height })
+        );
+      } else {
+        // Pan холста
+        const curCam = useCanvasStore.getState().camera;
+        useCanvasStore.getState().setCamera((prev) => ({
+          ...prev,
+          x: prev.x + e.deltaX / curCam.zoom,
+          y: prev.y + e.deltaY / curCam.zoom,
+        }));
+      }
+    };
+
+    const onMouseDownNative = (e: MouseEvent) => {
+      checkAndHandleMouseChordRef.current(e);
+    };
+
+    const onMouseUpNative = (e: MouseEvent) => {
+      if ((e.buttons & 1) === 0 || (e.buttons & 2) === 0) {
+        isMouseChordActiveRef.current = false;
+      }
+    };
+
+    const onContextMenuNative = (e: MouseEvent) => {
+      if (isMouseChordActiveRef.current || Date.now() - lastMouseChordTimeRef.current < 400) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    const onWindowBlur = () => {
+      isMouseChordActiveRef.current = false;
+    };
+
+    container.addEventListener('mousedown', onMouseDownNative, { capture: true });
+    window.addEventListener('mouseup', onMouseUpNative, { capture: true });
+    window.addEventListener('pointerup', onMouseUpNative, { capture: true });
+    window.addEventListener('blur', onWindowBlur);
+    container.addEventListener('contextmenu', onContextMenuNative, { capture: true });
+    container.addEventListener('wheel', onWheelNative, { passive: false });
+
+    return () => {
+      container.removeEventListener('mousedown', onMouseDownNative, { capture: true });
+      window.removeEventListener('mouseup', onMouseUpNative, { capture: true });
+      window.removeEventListener('pointerup', onMouseUpNative, { capture: true });
+      window.removeEventListener('blur', onWindowBlur);
+      container.removeEventListener('contextmenu', onContextMenuNative, { capture: true });
+      container.removeEventListener('wheel', onWheelNative);
+    };
+  }, []);
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    const isChord =
-      (e.button === 0 && (e.buttons & 2) !== 0) ||
-      (e.button === 2 && (e.buttons & 1) !== 0) ||
-      ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0);
-
-    if (isChord) {
-      triggerMouseChordUndo(e);
+    if (checkAndHandleMouseChord(e)) {
+      return;
     }
   };
 
   // Одиночный указатель (мышь, стилус или 1 палец в режиме рисования)
   const handleSinglePointerDown = (e: React.PointerEvent) => {
     // Проверка аккорда мыши: ЛКМ + ПКМ (Rocker gesture / Chord click) -> Отмена действия (Ctrl+Z)
-    const isChordLmbRmb =
-      ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0) ||
-      (e.button === 0 && (e.buttons & 2) !== 0) ||
-      (e.button === 2 && (e.buttons & 1) !== 0);
-
-    if (isChordLmbRmb) {
-      triggerMouseChordUndo(e);
+    if (checkAndHandleMouseChord(e)) {
       return;
     }
 
@@ -809,8 +873,7 @@ export const InfiniteCanvas: React.FC = () => {
 
   const handleSinglePointerMove = (e: React.PointerEvent) => {
     // Проверка аккорда мыши (ЛКМ + ПКМ) во время движения
-    if ((e.buttons & 1) !== 0 && (e.buttons & 2) !== 0) {
-      triggerMouseChordUndo(e);
+    if (checkAndHandleMouseChord(e)) {
       return;
     }
 
@@ -989,6 +1052,10 @@ export const InfiniteCanvas: React.FC = () => {
   }, []);
 
   const handleSinglePointerUp = (e: React.PointerEvent) => {
+    if ((e.buttons & 1) === 0 || (e.buttons & 2) === 0) {
+      isMouseChordActiveRef.current = false;
+    }
+
     if (panStartRef.current) {
       panStartRef.current = null;
       try {
@@ -1309,10 +1376,14 @@ export const InfiniteCanvas: React.FC = () => {
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if ((e.buttons & 1) === 0 || (e.buttons & 2) === 0) {
+      isMouseChordActiveRef.current = false;
+    }
     gestureManagerRef.current?.handlePointerUp(e);
   };
 
   const handlePointerLeave = () => {
+    isMouseChordActiveRef.current = false;
     if (cursorWorldPosRef.current) {
       cursorWorldPosRef.current = null;
       renderSelectionAndCursorLayer();

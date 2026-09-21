@@ -70,7 +70,14 @@ export const Ribbon: React.FC = () => {
 
       {/* Содержимое активной вкладки ленты */}
       {!isRibbonCollapsed && (
-        <div className="ribbon-content">
+        <div
+          className="ribbon-content"
+          onWheel={(e) => {
+            if (e.deltaY !== 0 && !e.shiftKey) {
+              e.currentTarget.scrollLeft += e.deltaY;
+            }
+          }}
+        >
           {activeRibbonTab === 'home' && <RibbonHome />}
           {activeRibbonTab === 'insert' && <RibbonInsert />}
           {activeRibbonTab === 'draw' && <RibbonDraw />}

@@ -268,10 +268,23 @@ export class TursoProvider implements ISyncProvider {
     };
   }
 
-  async deleteItems(userId: string, item: { sectionIds?: string[]; pageIds?: string[] }): Promise<void> {
+  async deleteItems(userId: string, item: { notebookIds?: string[]; sectionIds?: string[]; pageIds?: string[] }): Promise<void> {
     const client = this.getClient();
     const now = Date.now();
     const stmts: { sql: string; args: any[] }[] = [];
+
+    if (item.notebookIds && item.notebookIds.length > 0) {
+      for (const id of item.notebookIds) {
+        stmts.push({
+          sql: `UPDATE notebooks SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+          args: [now, now, id, userId],
+        });
+        stmts.push({
+          sql: `UPDATE sections SET deleted_at = ?, updated_at = ? WHERE notebook_id = ? AND user_id = ?`,
+          args: [now, now, id, userId],
+        });
+      }
+    }
 
     if (item.sectionIds && item.sectionIds.length > 0) {
       for (const id of item.sectionIds) {
