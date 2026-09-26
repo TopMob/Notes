@@ -29,6 +29,8 @@ export interface Page {
   camera: Camera;
   background: CanvasBackground;
   deletedAt?: number | null;
+  slug?: string;
+  slugAliases?: string[];
 }
 
 export const SECTION_COLORS = [

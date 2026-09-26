@@ -2169,3 +2169,263 @@
   color: var(--status-danger);
 }
 
+/* Вкладки в окне настроек */
+.settings-tabs-header {
+  display: flex;
+  gap: 8px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--hairline);
+  background-color: var(--bg-hover);
+}
+
+.settings-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.settings-tab-btn:hover {
+  color: var(--ink);
+}
+
+.settings-tab-btn.active {
+  color: var(--brand-onenote);
+  border-bottom-color: var(--brand-onenote);
+}
+
+/* Список сочетаний клавиш и мыши */
+.shortcuts-filter-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.shortcuts-categories {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.shortcuts-cat-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline);
+  background: var(--bg-card);
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.shortcuts-cat-btn:hover {
+  color: var(--ink);
+  border-color: var(--brand-onenote);
+}
+
+.shortcuts-cat-btn.active {
+  background: var(--brand-onenote);
+  color: #fff;
+  border-color: var(--brand-onenote);
+}
+
+.shortcuts-reset-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.shortcuts-reset-btn:hover {
+  color: var(--status-danger, #d83b01);
+  border-color: var(--status-danger, #d83b01);
+  background: rgba(216, 59, 1, 0.05);
+}
+
+.shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shortcut-item-card {
+  padding: 10px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shortcut-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.shortcut-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.shortcut-item-desc {
+  font-size: 11px;
+  color: var(--ink-secondary);
+  margin-top: 2px;
+}
+
+.shortcut-badges-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--bg-hover);
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  font-family: inherit;
+}
+
+.shortcut-chip-mouse {
+  background: var(--brand-onenote-light);
+  border-color: rgba(119, 25, 170, 0.2);
+  color: var(--brand-onenote);
+}
+
+.shortcut-chip-remove {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 2px;
+  display: flex;
+  align-items: center;
+  color: var(--ink-secondary);
+  border-radius: 2px;
+}
+
+.shortcut-chip-remove:hover {
+  color: var(--status-danger, #d83b01);
+}
+
+.shortcut-recording-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--brand-onenote-light);
+  border: 1px dashed var(--brand-onenote);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-onenote);
+  animation: pulse-shortcut 1.5s infinite;
+}
+
+@keyframes pulse-shortcut {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+.shortcut-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 4px;
+  border: 1px dashed var(--hairline);
+  background: transparent;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.shortcut-action-btn:hover {
+  border-color: var(--brand-onenote);
+  color: var(--brand-onenote);
+  background: var(--bg-hover);
+}
+
+.mouse-options-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.mouse-options-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  z-index: 100;
+  min-width: 170px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mouse-option-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.mouse-option-item:hover {
+  background: var(--bg-hover);
+}
+
+.mouse-option-item.active {
+  color: var(--brand-onenote);
+  font-weight: 600;
+  background: var(--brand-onenote-light);
+}
+
+

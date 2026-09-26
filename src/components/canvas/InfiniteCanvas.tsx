@@ -12,6 +12,7 @@ import { SpatialItem } from '../../canvas/engine/SpatialIndex';
 import { TextBlock } from '../../types/textblock';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
 import { useUiStore } from '../../store/useUiStore';
+import { useShortcutsStore, MouseChordType } from '../../store/useShortcutsStore';
 import { GestureManager } from '../../canvas/input/GestureManager';
 
 export const InfiniteCanvas: React.FC = () => {
@@ -137,11 +138,80 @@ export const InfiniteCanvas: React.FC = () => {
         return;
       }
 
-      if (e.code === 'Space' && !e.repeat) {
+      // Проверяем кастомизированные сочетания через useShortcutsStore
+      const action = useShortcutsStore.getState().getActionByKeyEvent(e);
+
+      if (action === 'pan_hold' || (e.code === 'Space' && !e.repeat)) {
         isSpacePressedRef.current = true;
         if (containerRef.current) containerRef.current.style.cursor = 'grab';
       }
 
+      if (action === 'undo') {
+        e.preventDefault();
+        globalCommandStack.undo();
+        return;
+      }
+
+      if (action === 'redo') {
+        e.preventDefault();
+        globalCommandStack.redo();
+        return;
+      }
+
+      if (action === 'delete_selected') {
+        e.preventDefault();
+        useCanvasStore.getState().deleteSelectedItems();
+        return;
+      }
+
+      if (action === 'clear_selection') {
+        useCanvasStore.getState().clearSelection();
+        return;
+      }
+
+      if (action === 'tool_pen') {
+        e.preventDefault();
+        useCanvasStore.getState().setActiveTool('pen');
+        return;
+      }
+
+      if (action === 'tool_highlighter') {
+        e.preventDefault();
+        useCanvasStore.getState().setActiveTool('highlighter');
+        return;
+      }
+
+      if (action === 'tool_eraser') {
+        e.preventDefault();
+        useCanvasStore.getState().setActiveTool('point-eraser');
+        return;
+      }
+
+      if (action === 'tool_cursor') {
+        e.preventDefault();
+        useCanvasStore.getState().setActiveTool('cursor');
+        return;
+      }
+
+      if (action === 'tool_lasso') {
+        e.preventDefault();
+        useCanvasStore.getState().setActiveTool('lasso');
+        return;
+      }
+
+      if (action === 'search') {
+        e.preventDefault();
+        useUiStore.getState().setSearchOpen(true);
+        return;
+      }
+
+      if (action === 'zen_mode') {
+        e.preventDefault();
+        useUiStore.getState().toggleZenMode();
+        return;
+      }
+
+      // Резервный fallback для гарантированной надежности стандартных клавиш
       const isZ = e.code === 'KeyZ' || e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'я';
       const isY = e.code === 'KeyY' || e.key.toLowerCase() === 'y' || e.key.toLowerCase() === 'н';
 
@@ -548,7 +618,18 @@ export const InfiniteCanvas: React.FC = () => {
       isMouseChordActiveRef.current = true;
       lastMouseChordTimeRef.current = now;
 
-      triggerMouseChordUndo(e);
+      const chordType: MouseChordType =
+        e.button === 0 && (e.buttons & 2) !== 0 ? 'rmb+lmb' : 'lmb+rmb';
+      const configuredAction =
+        useShortcutsStore.getState().getActionByMouseChord('rmb+lmb') ||
+        useShortcutsStore.getState().getActionByMouseChord(chordType);
+
+      if (configuredAction === 'redo') {
+        globalCommandStack.redo();
+        renderSelectionAndCursorLayer();
+      } else {
+        triggerMouseChordUndo(e);
+      }
       return true;
     },
     [triggerMouseChordUndo]
@@ -672,6 +753,24 @@ export const InfiniteCanvas: React.FC = () => {
         return;
       }
       return;
+    }
+
+    // 0.1 Дополнительные боковые кнопки мыши (Mouse 4 / Mouse 5)
+    if (e.button === 3 || e.button === 4) {
+      const mouseTrigger: MouseChordType = e.button === 3 ? 'mouse4' : 'mouse5';
+      const sideAction = useShortcutsStore.getState().getActionByMouseChord(mouseTrigger);
+      if (sideAction === 'undo') {
+        e.preventDefault();
+        globalCommandStack.undo();
+        renderSelectionAndCursorLayer();
+        return;
+      }
+      if (sideAction === 'redo') {
+        e.preventDefault();
+        globalCommandStack.redo();
+        renderSelectionAndCursorLayer();
+        return;
+      }
     }
 
     // 1. Pan режим (Пробел или средняя кнопка мыши / СКМ)

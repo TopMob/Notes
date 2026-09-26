@@ -79,6 +79,12 @@ export async function loadPages(sectionId: string): Promise<Page[]> {
   return pages.filter((p) => !p.deletedAt).sort((a, b) => a.order - b.order);
 }
 
+export async function loadAllPages(): Promise<Page[]> {
+  const db = await getDB();
+  const pages = await db.getAll('pages');
+  return pages.filter((p) => !p.deletedAt);
+}
+
 export async function loadPageData(pageId: string): Promise<{
   strokes: Stroke[];
   shapes: ShapeObject[];
@@ -275,7 +281,7 @@ export async function savePageTextBlocks(pageId: string, textBlocks: TextBlock[]
 
 export async function updatePageMetadata(
   pageId: string,
-  updates: Partial<Pick<Page, 'title' | 'camera' | 'background'>>
+  updates: Partial<Pick<Page, 'title' | 'camera' | 'background' | 'slug' | 'slugAliases'>>
 ): Promise<void> {
   const db = await getDB();
   const page = await db.get('pages', pageId);

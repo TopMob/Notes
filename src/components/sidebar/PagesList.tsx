@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, MoreVertical, Trash2, Edit2 } from 'lucide-react';
+import { Plus, MoreVertical, Trash2, Edit2, Link, Check } from 'lucide-react';
 import { useNotebookStore } from '../../store/useNotebookStore';
 import { useUiStore } from '../../store/useUiStore';
 import { Page } from '../../types/notebook';
+import { formatPageUrl, titleToSlug } from '../../utils/slug';
 
 export const PagesList: React.FC = () => {
   const {
@@ -18,6 +19,7 @@ export const PagesList: React.FC = () => {
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [activeMenuPageId, setActiveMenuPageId] = useState<string | null>(null);
+  const [copiedPageId, setCopiedPageId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Закрытие контекстного меню при клике вне его
@@ -50,6 +52,19 @@ export const PagesList: React.FC = () => {
       await renamePage(editingPageId, editingTitle.trim());
     }
     setEditingPageId(null);
+  };
+
+  const handleCopyLink = async (page: Page) => {
+    const slug = page.slug || titleToSlug(page.title);
+    const url = formatPageUrl(slug, true);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedPageId(page.id);
+      setTimeout(() => setCopiedPageId(null), 2000);
+    } catch {
+      // fallback
+    }
+    setActiveMenuPageId(null);
   };
 
   return (
@@ -109,6 +124,19 @@ export const PagesList: React.FC = () => {
 
                 {isMenuOpen && (
                   <div ref={menuRef} className="dropdown-menu item-context-menu">
+                    <button
+                      className="dropdown-item"
+                      onClick={() => handleCopyLink(page)}
+                    >
+                      {copiedPageId === page.id ? (
+                        <Check size={13} style={{ color: 'var(--brand-green, #107c41)' }} />
+                      ) : (
+                        <Link size={13} />
+                      )}
+                      <span>
+                        {copiedPageId === page.id ? 'Ссылка скопирована!' : 'Копировать ссылку'}
+                      </span>
+                    </button>
                     <button
                       className="dropdown-item"
                       onClick={() => handleStartRename(page)}

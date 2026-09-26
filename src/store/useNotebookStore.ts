@@ -5,6 +5,7 @@ import {
   loadNotebooks,
   loadSections,
   loadPages,
+  loadAllPages,
   createNotebook as dbCreateNotebook,
   renameNotebook as dbRenameNotebook,
   deleteNotebook as dbDeleteNotebook,
@@ -22,6 +23,13 @@ import {
 } from '../db/storage';
 import { getDB } from '../db/idb';
 import { useCanvasStore } from './useCanvasStore';
+import {
+  getSlugFromPathname,
+  findPageBySlugOrAlias,
+  generateUniqueSlug,
+  titleToSlug,
+  formatPageUrl,
+} from '../utils/slug';
 
 interface NotebookState {
   notebooks: Notebook[];
@@ -42,8 +50,8 @@ interface NotebookState {
   renameNotebook: (notebookId: string, newTitle: string) => Promise<void>;
   removeNotebook: (notebookId: string) => Promise<void>;
   selectSection: (section: Section) => Promise<void>;
-  selectPage: (page: Page) => Promise<void>;
-  navigateToPage: (pageId: string) => Promise<void>;
+  selectPage: (page: Page, updateUrl?: boolean) => Promise<void>;
+  navigateToPage: (pageId: string, updateUrl?: boolean) => Promise<void>;
 
   addSection: (title?: string, color?: string) => Promise<Section>;
   addPage: (title?: string) => Promise<Page>;
@@ -66,6 +74,33 @@ interface NotebookState {
   refreshFromStorage: () => Promise<void>;
 }
 
+let isPopStateBound = false;
+
+function setupPopStateListener() {
+  if (isPopStateBound || typeof window === 'undefined') return;
+  isPopStateBound = true;
+
+  window.addEventListener('popstate', async () => {
+    const slug = getSlugFromPathname(window.location.pathname);
+    if (!slug) return;
+
+    const currentActive = useNotebookStore.getState().activePage;
+    if (
+      currentActive &&
+      ((currentActive.slug && currentActive.slug.toLowerCase() === slug.toLowerCase()) ||
+        titleToSlug(currentActive.title) === slug.toLowerCase())
+    ) {
+      return;
+    }
+
+    const allPages = await loadAllPages();
+    const matched = findPageBySlugOrAlias(allPages, slug);
+    if (matched && matched.id !== currentActive?.id) {
+      await useNotebookStore.getState().navigateToPage(matched.id, false);
+    }
+  });
+}
+
 export const useNotebookStore = create<NotebookState>((set, get) => ({
   notebooks: [],
   activeNotebook: null,
@@ -79,30 +114,76 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     // Предотвращаем повторную инициализацию
     if (get().notebooks.length > 0 && !get().isLoading) return;
 
+    setupPopStateListener();
+
     set({ isLoading: true });
     await initStorage();
 
     const notebooks = await loadNotebooks();
-    const activeNotebook = notebooks[0] || null;
+    const allPages = await loadAllPages();
 
+    // Мягкая миграция: гарантируем наличие уникального slug у всех существующих страниц
+    const existingSlugs: string[] = [];
+    const existingAliases: string[] = [];
+    for (const p of allPages) {
+      if (p.slug) existingSlugs.push(p.slug);
+      if (p.slugAliases) existingAliases.push(...p.slugAliases);
+    }
+
+    for (const p of allPages) {
+      if (!p.slug) {
+        p.slug = generateUniqueSlug(p.title, existingSlugs, undefined, existingAliases);
+        existingSlugs.push(p.slug);
+        if (!p.slugAliases) p.slugAliases = [];
+        await updatePageMetadata(p.id, { slug: p.slug, slugAliases: p.slugAliases });
+      }
+    }
+
+    // Проверяем URL: если передан слаг, ищем целевую страницу
+    const targetSlug = typeof window !== 'undefined' ? getSlugFromPathname(window.location.pathname) : null;
+    let targetPage = targetSlug ? findPageBySlugOrAlias(allPages, targetSlug) : null;
+
+    let activeNotebook: Notebook | null = null;
     let sections: Section[] = [];
     let activeSection: Section | null = null;
     let pages: Page[] = [];
     let activePage: Page | null = null;
 
-    if (activeNotebook) {
+    if (targetPage) {
+      const db = await getDB();
+      const section = await db.get('sections', targetPage.sectionId);
+      if (section) {
+        const notebook = await db.get('notebooks', section.notebookId);
+        if (notebook) {
+          activeNotebook = notebook;
+          sections = await loadSections(notebook.id);
+          activeSection = section;
+          pages = await loadPages(section.id);
+          activePage = pages.find((p) => p.id === targetPage!.id) || targetPage;
+        }
+      }
+    }
+
+    // Если страница не найдена по URL — открываем первую страницу по умолчанию
+    if (!activePage && notebooks.length > 0) {
+      activeNotebook = notebooks[0];
       sections = await loadSections(activeNotebook.id);
       activeSection = sections[0] || null;
 
       if (activeSection) {
         pages = await loadPages(activeSection.id);
-        // По умолчанию активируем первую страницу
         activePage = pages[0] || null;
       }
     }
 
     if (activePage) {
       await useCanvasStore.getState().loadPage(activePage.id, activePage.camera, activePage.background);
+      if (typeof window !== 'undefined') {
+        const canonicalPath = formatPageUrl(activePage.slug || titleToSlug(activePage.title));
+        if (window.location.pathname !== canonicalPath) {
+          window.history.replaceState({ pageId: activePage.id }, '', canonicalPath);
+        }
+      }
     }
 
     set({
@@ -133,6 +214,12 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
     if (activePage) {
       await useCanvasStore.getState().loadPage(activePage.id, activePage.camera, activePage.background);
+      if (typeof window !== 'undefined') {
+        const canonicalPath = formatPageUrl(activePage.slug || titleToSlug(activePage.title));
+        if (window.location.pathname !== canonicalPath) {
+          window.history.pushState({ pageId: activePage.id }, '', canonicalPath);
+        }
+      }
     }
   },
 
@@ -167,6 +254,11 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       today.getMonth() + 1
     ).padStart(2, '0')}.${today.getFullYear()}`;
 
+    const allExistingPages = await loadAllPages();
+    const existingSlugs = allExistingPages.map((p) => p.slug || titleToSlug(p.title));
+    const existingAliases = allExistingPages.flatMap((p) => p.slugAliases || []);
+    const firstPageSlug = generateUniqueSlug(formattedDate, existingSlugs, undefined, existingAliases);
+
     const firstPage: Page = {
       id: `page-${now}`,
       sectionId: firstSection.id,
@@ -176,6 +268,8 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       order: 0,
       camera: { x: 0, y: 0, zoom: 1 },
       background: 'plain',
+      slug: firstPageSlug,
+      slugAliases: [],
     };
     await dbCreatePage(firstPage);
 
@@ -190,6 +284,10 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     });
 
     await useCanvasStore.getState().loadPage(firstPage.id, firstPage.camera, firstPage.background);
+
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ pageId: firstPage.id }, '', formatPageUrl(firstPageSlug));
+    }
 
     return newNotebook;
   },
@@ -234,15 +332,27 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
     if (activePage) {
       await useCanvasStore.getState().loadPage(activePage.id, activePage.camera, activePage.background);
+      if (typeof window !== 'undefined') {
+        const canonicalPath = formatPageUrl(activePage.slug || titleToSlug(activePage.title));
+        if (window.location.pathname !== canonicalPath) {
+          window.history.pushState({ pageId: activePage.id }, '', canonicalPath);
+        }
+      }
     }
   },
 
-  selectPage: async (page) => {
+  selectPage: async (page, updateUrl = true) => {
     set({ activePage: page });
     await useCanvasStore.getState().loadPage(page.id, page.camera, page.background);
+    if (updateUrl && typeof window !== 'undefined') {
+      const canonicalPath = formatPageUrl(page.slug || titleToSlug(page.title));
+      if (window.location.pathname !== canonicalPath) {
+        window.history.pushState({ pageId: page.id }, '', canonicalPath);
+      }
+    }
   },
 
-  navigateToPage: async (pageId: string) => {
+  navigateToPage: async (pageId: string, updateUrl = true) => {
     const db = await getDB();
     const page = await db.get('pages', pageId);
     if (!page) return;
@@ -265,6 +375,13 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     });
 
     await useCanvasStore.getState().loadPage(page.id, page.camera, page.background);
+
+    if (updateUrl && typeof window !== 'undefined') {
+      const canonicalPath = formatPageUrl(page.slug || titleToSlug(page.title));
+      if (window.location.pathname !== canonicalPath) {
+        window.history.pushState({ pageId: page.id }, '', canonicalPath);
+      }
+    }
   },
 
   addSection: async (title = 'Новый раздел', color) => {
@@ -288,6 +405,11 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       today.getMonth() + 1
     ).padStart(2, '0')}.${today.getFullYear()}`;
 
+    const allExistingPages = await loadAllPages();
+    const existingSlugs = allExistingPages.map((p) => p.slug || titleToSlug(p.title));
+    const existingAliases = allExistingPages.flatMap((p) => p.slugAliases || []);
+    const pageSlug = generateUniqueSlug(formattedDate, existingSlugs, undefined, existingAliases);
+
     const newPage: Page = {
       id: `page-${Date.now()}`,
       sectionId: newSection.id,
@@ -296,6 +418,8 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       order: 0,
       camera: { x: 0, y: 0, zoom: 1 },
       background: 'plain',
+      slug: pageSlug,
+      slugAliases: [],
     };
 
     await dbCreatePage(newPage);
@@ -310,6 +434,10 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
     await useCanvasStore.getState().loadPage(newPage.id, newPage.camera, newPage.background);
 
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ pageId: newPage.id }, '', formatPageUrl(pageSlug));
+    }
+
     return newSection;
   },
 
@@ -321,15 +449,23 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     const formattedDate = `${String(today.getDate()).padStart(2, '0')}.${String(
       today.getMonth() + 1
     ).padStart(2, '0')}.${today.getFullYear()}`;
+    const pageTitle = title || formattedDate;
+
+    const allExistingPages = await loadAllPages();
+    const existingSlugs = allExistingPages.map((p) => p.slug || titleToSlug(p.title));
+    const existingAliases = allExistingPages.flatMap((p) => p.slugAliases || []);
+    const pageSlug = generateUniqueSlug(pageTitle, existingSlugs, undefined, existingAliases);
 
     const newPage: Page = {
       id: `page-${Date.now()}`,
       sectionId: activeSection.id,
-      title: title || formattedDate,
+      title: pageTitle,
       createdAt: Date.now(),
       order: pages.length,
       camera: { x: 0, y: 0, zoom: 1 },
       background: 'plain',
+      slug: pageSlug,
+      slugAliases: [],
     };
 
     await dbCreatePage(newPage);
@@ -341,6 +477,10 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     });
 
     await useCanvasStore.getState().loadPage(newPage.id, newPage.camera, newPage.background);
+
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ pageId: newPage.id }, '', formatPageUrl(pageSlug));
+    }
 
     return newPage;
   },
@@ -464,15 +604,53 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
     if (nextActive) {
       await useCanvasStore.getState().loadPage(nextActive.id, nextActive.camera, nextActive.background);
+      if (typeof window !== 'undefined') {
+        const canonicalPath = formatPageUrl(nextActive.slug || titleToSlug(nextActive.title));
+        window.history.replaceState({ pageId: nextActive.id }, '', canonicalPath);
+      }
+    } else if (typeof window !== 'undefined') {
+      window.history.replaceState({}, '', '/');
     }
   },
 
   renamePage: async (pageId, newTitle) => {
-    await updatePageMetadata(pageId, { title: newTitle });
+    const cleanTitle = newTitle.trim();
+    if (!cleanTitle) return;
+
+    const { pages, activePage } = get();
+    const page = pages.find((p) => p.id === pageId);
+    if (!page) return;
+
+    const oldSlug = page.slug || titleToSlug(page.title);
+    const allExistingPages = await loadAllPages();
+    const existingSlugs = allExistingPages.map((p) => p.slug || titleToSlug(p.title));
+    const existingAliases = allExistingPages.flatMap((p) => p.slugAliases || []);
+    const newSlug = generateUniqueSlug(cleanTitle, existingSlugs, oldSlug, existingAliases);
+
+    let updatedAliases = page.slugAliases || [];
+    if (newSlug !== oldSlug && !updatedAliases.includes(oldSlug)) {
+      updatedAliases = [...updatedAliases, oldSlug];
+    }
+
+    await updatePageMetadata(pageId, {
+      title: cleanTitle,
+      slug: newSlug,
+      slugAliases: updatedAliases,
+    });
+
     set((state) => ({
-      pages: state.pages.map((p) => (p.id === pageId ? { ...p, title: newTitle } : p)),
-      activePage: state.activePage?.id === pageId ? { ...state.activePage, title: newTitle } : state.activePage,
+      pages: state.pages.map((p) =>
+        p.id === pageId ? { ...p, title: cleanTitle, slug: newSlug, slugAliases: updatedAliases } : p
+      ),
+      activePage:
+        state.activePage?.id === pageId
+          ? { ...state.activePage, title: cleanTitle, slug: newSlug, slugAliases: updatedAliases }
+          : state.activePage,
     }));
+
+    if (activePage?.id === pageId && typeof window !== 'undefined') {
+      window.history.replaceState({ pageId }, '', formatPageUrl(newSlug));
+    }
   },
 
   refreshFromStorage: async () => {
