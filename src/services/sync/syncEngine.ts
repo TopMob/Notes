@@ -69,6 +69,7 @@ class SyncEngine {
   private readonly IDLE_DELAY = 3000; // 3 секунды тишины для автосохранения
   private readonly MAX_WAIT = 15000;  // 15 секунд непрерывной работы
   private pendingPayload: SyncPayload = {};
+  private pendingPageElementIds = new Set<string>();
 
   constructor() {
     this.tursoProvider = new TursoProvider();
@@ -139,6 +140,10 @@ class SyncEngine {
       return; // Локальный режим, в облако ничего не отправляем
     }
 
+    if (payload.pageElements?.pageId) {
+      this.pendingPageElementIds.add(payload.pageElements.pageId);
+    }
+
     // Всегда сохраняем в очередь изменений
     this.pendingPayload = this.mergePayloads(this.pendingPayload, payload);
 
@@ -204,17 +209,25 @@ class SyncEngine {
     const provider = this.getActiveProvider();
     if (!userId || !provider) return;
 
+    const pageElementIdsToFlush = Array.from(this.pendingPageElementIds);
+    this.pendingPageElementIds.clear();
+
     // Проверяем, есть ли накопленные данные
     const hasData =
       (this.pendingPayload.notebooks && this.pendingPayload.notebooks.length > 0) ||
       (this.pendingPayload.sections && this.pendingPayload.sections.length > 0) ||
       (this.pendingPayload.pages && this.pendingPayload.pages.length > 0) ||
-      (this.pendingPayload.pageElements && this.pendingPayload.pageElements.pageId);
+      (this.pendingPayload.pageElements && this.pendingPayload.pageElements.pageId) ||
+      pageElementIdsToFlush.length > 0;
 
     if (!hasData) return;
 
     const payload = { ...this.pendingPayload };
     this.pendingPayload = {};
+
+    if (payload.pageElements?.pageId && !pageElementIdsToFlush.includes(payload.pageElements.pageId)) {
+      pageElementIdsToFlush.push(payload.pageElements.pageId);
+    }
 
     useSyncStore.getState().setStatus('syncing');
 
@@ -228,8 +241,12 @@ class SyncEngine {
       if (payload.pages && payload.pages.length > 0) {
         await provider.pushPages(userId, payload.pages);
       }
-      if (payload.pageElements && payload.pageElements.pageId) {
-        await provider.pushPageElements(userId, payload.pageElements.pageId, payload.pageElements);
+
+      // Для каждой изменённой страницы отправляем ПОЛНЫЙ срез данных из IndexedDB
+      // Это гарантирует, что штрихи не затираются частичными diff-пакетами!
+      for (const pageId of pageElementIdsToFlush) {
+        const fullPageData = await loadPageData(pageId);
+        await provider.pushPageElements(userId, pageId, fullPageData);
       }
 
       this.retryDelay = 2000;
@@ -240,6 +257,9 @@ class SyncEngine {
       console.error('[SyncEngine] Error flushing changes, restoring payload to queue:', err);
       // ВОССТАНОВЛЕНИЕ В ОЧЕРЕДЬ: мержим обратно
       this.pendingPayload = this.mergePayloads(payload, this.pendingPayload);
+      for (const id of pageElementIdsToFlush) {
+        this.pendingPageElementIds.add(id);
+      }
       useSyncStore.getState().setError(err.message || 'Ошибка синхронизации');
 
       // Планируем повтор с экспоненциальным backoff
@@ -345,15 +365,49 @@ class SyncEngine {
             pagesToPush.push(pg);
           } else if (cPg.deletedAt && (pg.updatedAt || 0) > (cPg.deletedAt || 0)) {
             pagesToPush.push(pg);
+          } else if ((pg.updatedAt || 0) > (cPg.updatedAt || 0) || pg.title !== cPg.title) {
+            pagesToPush.push(pg);
           }
         }
       }
+
       if (pagesToPush.length > 0) {
         await provider.pushPages(userId, pagesToPush);
         pushedPages += pagesToPush.length;
-        for (const pg of pagesToPush) {
-          const pageData = await loadPageData(pg.id);
+      }
+
+      // Г) Элементы страниц (штрихи, рисунки, фигуры, текст)
+      // Считаем количество активных элементов в облаке для каждой страницы
+      const cloudElementsCountByPage = new Map<string, number>();
+      for (const el of cloudData.elements) {
+        if (!el.deletedAt) {
+          cloudElementsCountByPage.set(el.pageId, (cloudElementsCountByPage.get(el.pageId) || 0) + 1);
+        }
+      }
+
+      let pushedElements = 0;
+      for (const pg of localPages) {
+        if (pg.deletedAt) continue;
+        const pageData = await loadPageData(pg.id);
+        const localElementsCount =
+          pageData.strokes.length + pageData.shapes.length + pageData.textBlocks.length;
+        const hasLocalElements = localElementsCount > 0;
+
+        const cloudElemCount = cloudElementsCountByPage.get(pg.id) || 0;
+        const cPg = cloudPageMap.get(pg.id);
+        const isNewerLocally = (pg.updatedAt || 0) >= (cPg?.updatedAt || 0);
+
+        // Отправляем элементы страницы в облако если:
+        // 1. У нас есть локальные элементы (рисунки/текст), а в облаке их 0 (наш случай с ноутбуком!)
+        // 2. Страница была в списке pagesToPush (новая или обновленная страница)
+        // 3. Локальные данные новее и у нас есть локальные элементы
+        if (
+          (hasLocalElements && cloudElemCount === 0) ||
+          pagesToPush.some((p) => p.id === pg.id) ||
+          (hasLocalElements && isNewerLocally)
+        ) {
           await provider.pushPageElements(userId, pg.id, pageData);
+          pushedElements += localElementsCount;
         }
       }
 
@@ -485,15 +539,17 @@ class SyncEngine {
         pulledElements > 0 ||
         pushedNotebooks > 0 ||
         pushedSections > 0 ||
-        pushedPages > 0;
+        pushedPages > 0 ||
+        pushedElements > 0;
 
       if (hasChanges) {
         await useNotebookStore.getState().refreshFromStorage();
       }
 
       const activePageId = useCanvasStore.getState().currentPageId;
-      if (activePageId && cloudData.elements.some((e) => e.pageId === activePageId)) {
+      if (activePageId) {
         const pageData = await loadPageData(activePageId);
+        useCanvasStore.getState().spatialIndex.rebuild([...pageData.strokes, ...pageData.shapes]);
         useCanvasStore.setState({
           strokes: pageData.strokes,
           shapes: pageData.shapes,
@@ -502,7 +558,7 @@ class SyncEngine {
       }
 
       console.log(
-        `[SyncEngine] syncAll complete. Pushed: nb=${pushedNotebooks}, sec=${pushedSections}, pg=${pushedPages}. Pulled: nb=${pulledNotebooks}, sec=${pulledSections}, pg=${pulledPages}, el=${pulledElements}`
+        `[SyncEngine] syncAll complete. Pushed: nb=${pushedNotebooks}, sec=${pushedSections}, pg=${pushedPages}, el=${pushedElements}. Pulled: nb=${pulledNotebooks}, sec=${pulledSections}, pg=${pulledPages}, el=${pulledElements}`
       );
 
       this.retryDelay = 2000;
@@ -511,8 +567,18 @@ class SyncEngine {
       useSyncStore.getState().setError(null);
 
       return {
-        pushed: { notebooks: pushedNotebooks, sections: pushedSections, pages: pushedPages },
-        pulled: { notebooks: pulledNotebooks, sections: pulledSections, pages: pulledPages, elements: pulledElements },
+        pushed: {
+          notebooks: pushedNotebooks,
+          sections: pushedSections,
+          pages: pushedPages,
+          elements: pushedElements,
+        },
+        pulled: {
+          notebooks: pulledNotebooks,
+          sections: pulledSections,
+          pages: pulledPages,
+          elements: pulledElements,
+        },
       };
     } catch (err: any) {
       console.error('[SyncEngine] syncAll failed:', err);

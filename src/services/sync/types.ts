@@ -37,6 +37,7 @@ export interface SyncStats {
     notebooks: number;
     sections: number;
     pages: number;
+    elements?: number;
   };
   pulled: {
     notebooks: number;

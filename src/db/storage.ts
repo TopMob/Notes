@@ -213,19 +213,32 @@ export async function savePageFull(
   for (const k of existingTb) await tbStore.delete(k);
   for (const tb of data.textBlocks) await tbStore.put(tb);
 
+  let updatedPage: Page | null = null;
   if (data.camera || data.background) {
     const pageStore = tx.objectStore('pages');
     const page = await pageStore.get(pageId);
     if (page) {
-      await pageStore.put({
+      updatedPage = {
         ...page,
         ...(data.camera ? { camera: data.camera } : {}),
         ...(data.background ? { background: data.background } : {}),
-      });
+        updatedAt: Date.now(),
+      };
+      await pageStore.put(updatedPage);
     }
   }
 
   await tx.done;
+
+  syncEngine.notifyChange({
+    pageElements: {
+      pageId,
+      strokes: data.strokes,
+      shapes: data.shapes,
+      textBlocks: data.textBlocks,
+    },
+    pages: updatedPage ? [updatedPage] : undefined,
+  });
 }
 
 export async function savePageStrokes(pageId: string, strokes: Stroke[]): Promise<void> {

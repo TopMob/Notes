@@ -47,20 +47,24 @@ export const CloudSettingsModal: React.FC = () => {
     try {
       const stats = await syncEngine.syncAll();
       const pushedTotal = stats.pushed.notebooks + stats.pushed.sections + stats.pushed.pages;
+      const pushedElem = stats.pushed.elements || 0;
       const pulledTotal = stats.pulled.notebooks + stats.pulled.sections + stats.pulled.pages;
+      const pulledElem = stats.pulled.elements || 0;
 
       let msg = 'Синхронизация завершена!';
-      if (pushedTotal > 0 || pulledTotal > 0) {
+      if (pushedTotal > 0 || pulledTotal > 0 || pushedElem > 0 || pulledElem > 0) {
         const parts: string[] = [];
-        if (pushedTotal > 0) {
-          parts.push(`отправлено: ${pushedTotal}`);
+        if (pushedTotal > 0 || pushedElem > 0) {
+          const detail = pushedElem > 0 ? ` (рисунков/блоков: ${pushedElem})` : '';
+          parts.push(`отправлено: ${pushedTotal}${detail}`);
         }
-        if (pulledTotal > 0) {
-          parts.push(`получено: ${pulledTotal}`);
+        if (pulledTotal > 0 || pulledElem > 0) {
+          const detail = pulledElem > 0 ? ` (рисунков/блоков: ${pulledElem})` : '';
+          parts.push(`получено: ${pulledTotal}${detail}`);
         }
         msg = `Успешно: ${parts.join(', ')}`;
       } else {
-        msg = 'Все блокноты, разделы и страницы уже синхронизированы!';
+        msg = 'Все блокноты, разделы, страницы и рисунки уже синхронизированы!';
       }
       setSyncSuccessMsg(msg);
       setTimeout(() => setSyncSuccessMsg(null), 6000);
