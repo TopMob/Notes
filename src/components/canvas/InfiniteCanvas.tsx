@@ -679,6 +679,10 @@ export const InfiniteCanvas: React.FC = () => {
     };
 
     const onContextMenuNative = (e: MouseEvent) => {
+      // Разрешаем контекстное меню браузера для активного текста (автоисправление, проверка орфографии)
+      if ((e.target as HTMLElement)?.closest('.text-block-content, .text-block-container')) {
+        return;
+      }
       if (isMouseChordActiveRef.current || Date.now() - lastMouseChordTimeRef.current < 400) {
         e.preventDefault();
         e.stopPropagation();
@@ -719,9 +723,17 @@ export const InfiniteCanvas: React.FC = () => {
       return;
     }
 
-    // Если активен курсор и клик внутри контейнера текста - отдаем управление contentEditable
-    if (activeTool === 'cursor' && (e.target as HTMLElement)?.closest('.text-block-container')) {
-      return;
+    // Если клик внутри контейнера текста:
+    const isInsideText = Boolean((e.target as HTMLElement)?.closest('.text-block-container, .text-block-content'));
+    if (isInsideText) {
+      // ПКМ по активному тексту — позволяем браузеру открыть контекстное меню для автоисправления
+      if (e.button === 2) {
+        return;
+      }
+      // При обычном клике в режиме курсора отдаем управление contentEditable
+      if (activeTool === 'cursor') {
+        return;
+      }
     }
 
     const rect = containerRef.current?.getBoundingClientRect();
@@ -908,8 +920,67 @@ export const InfiniteCanvas: React.FC = () => {
       return;
     }
 
-    // 6. Лассо
+    // 6. Лассо: выделение и возможность сразу перетаскивать выделенные элементы
     if (activeTool === 'lasso') {
+      const hit = findItemAtPoint(worldPos);
+
+      // Проверяем, нажат ли уже ранее выделенный объект
+      const isHitAlreadySelected = hit && (
+        ('points' in hit && selectedStrokeIds.includes(hit.id)) ||
+        ('type' in hit && selectedShapeIds.includes(hit.id))
+      );
+
+      const bounds = computeSelectionBounds();
+      const pad = 12 / camera.zoom;
+      const isInsideSelection = bounds &&
+        worldPos.x >= bounds.minX - pad &&
+        worldPos.x <= bounds.maxX + pad &&
+        worldPos.y >= bounds.minY - pad &&
+        worldPos.y <= bounds.maxY + pad;
+
+      const hasSelection =
+        selectedStrokeIds.length > 0 ||
+        selectedShapeIds.length > 0 ||
+        selectedTextBlockIds.length > 0;
+
+      // Если есть выделение и пользователь кликнул по выделенному элементу или внутри рамки выделения —
+      // СРАЗУ начинаем перетаскивать (без необходимости отдельно переключаться на инструмент "курсор"!)
+      if (hasSelection && (isHitAlreadySelected || isInsideSelection)) {
+        moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
+        dragInitialSnapshotRef.current = {
+          strokes: [...useCanvasStore.getState().strokes],
+          shapes: [...useCanvasStore.getState().shapes],
+          textBlocks: [...useCanvasStore.getState().textBlocks],
+        };
+        if (containerRef.current) {
+          containerRef.current.style.cursor = 'grabbing';
+        }
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        return;
+      }
+
+      // Если кликнули напрямую по невыделенному элементу — сразу выделяем и перетаскиваем
+      if (hit) {
+        if ('points' in hit) {
+          setSelection([hit.id], [], []);
+        } else if ('type' in hit) {
+          setSelection([], [hit.id], []);
+        }
+        moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
+        dragInitialSnapshotRef.current = {
+          strokes: [...useCanvasStore.getState().strokes],
+          shapes: [...useCanvasStore.getState().shapes],
+          textBlocks: [...useCanvasStore.getState().textBlocks],
+        };
+        if (containerRef.current) {
+          containerRef.current.style.cursor = 'grabbing';
+        }
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        return;
+      }
+
+      // Клик по пустому месту — сбрасываем выделение и начинаем рисовать контур лассо
+      clearSelection();
       isPointerDownRef.current = true;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       lassoPointsRef.current = [{ ...worldPos, pressure: 0.5, t: Date.now() }];
@@ -997,11 +1068,38 @@ export const InfiniteCanvas: React.FC = () => {
       const dy = (e.clientY - moveDragStartRef.current.clientY) / camera.zoom;
       moveSelectedItems(dx, dy);
       moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
+      if (containerRef.current) {
+        containerRef.current.style.cursor = 'grabbing';
+      }
       return;
     }
 
     const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     const worldPos = Viewport.screenToWorld(screenPos, camera, viewportSize);
+
+    // Динамический курсор 'move' при наведении на выделенные элементы (в режиме лассо или курсора)
+    if (activeTool === 'lasso' || activeTool === 'cursor') {
+      const hasSelection =
+        selectedStrokeIds.length > 0 ||
+        selectedShapeIds.length > 0 ||
+        selectedTextBlockIds.length > 0;
+      if (hasSelection && containerRef.current) {
+        const bounds = computeSelectionBounds();
+        const pad = 12 / camera.zoom;
+        const isInsideSelection = bounds &&
+          worldPos.x >= bounds.minX - pad &&
+          worldPos.x <= bounds.maxX + pad &&
+          worldPos.y >= bounds.minY - pad &&
+          worldPos.y <= bounds.maxY + pad;
+        if (isInsideSelection) {
+          containerRef.current.style.cursor = 'move';
+        } else {
+          containerRef.current.style.cursor = '';
+        }
+      } else if (containerRef.current) {
+        containerRef.current.style.cursor = '';
+      }
+    }
 
     // ПКМ точечный ластик при зажатой правой кнопке мыши
     if (isRightClickEraserRef.current && isPointerDownRef.current) {
@@ -1174,6 +1272,9 @@ export const InfiniteCanvas: React.FC = () => {
           dragInitialSnapshotRef.current.textBlocks
         );
         dragInitialSnapshotRef.current = null;
+      }
+      if (containerRef.current) {
+        containerRef.current.style.cursor = '';
       }
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
@@ -1515,7 +1616,13 @@ export const InfiniteCanvas: React.FC = () => {
     <div
       ref={containerRef}
       className={`infinite-canvas-viewport tool-${activeTool} cursor-style-${penCursorStyle}`}
-      onContextMenu={(e) => e.preventDefault()}
+      onContextMenu={(e) => {
+        // Разрешаем стандартное контекстное меню браузера для активного текста (автоисправление)
+        if ((e.target as HTMLElement)?.closest('.text-block-content, .text-block-container')) {
+          return;
+        }
+        e.preventDefault();
+      }}
       onMouseDown={handleMouseDown}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

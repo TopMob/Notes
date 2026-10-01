@@ -1108,6 +1108,24 @@
   min-height: 28px;
 }
 
+.text-block-content sup {
+  font-size: 0.72em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+  top: -0.45em;
+  font-weight: 500;
+}
+
+.text-block-content sub {
+  font-size: 0.72em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+  bottom: -0.22em;
+  font-weight: 500;
+}
+
 .text-block-content:empty:before {
   content: attr(data-placeholder);
   color: var(--ink-muted);
@@ -1251,6 +1269,38 @@
   display: block;
   text-align: center;
   margin: 10px 0;
+}
+
+/* Выпадающая панель вставки специальных символов */
+.symbol-picker-dropdown {
+  user-select: none;
+  font-family: var(--font-sans);
+}
+
+.symbol-cell-btn:hover {
+  background-color: var(--bg-hover, #edebe9) !important;
+  border-color: var(--brand-onenote, #7719aa) !important;
+  transform: scale(1.08);
+  z-index: 1;
+}
+
+.symbol-cell-btn:active {
+  transform: scale(0.95);
+  background-color: rgba(119, 25, 170, 0.2) !important;
+}
+
+.symbol-tab-btn:hover {
+  background-color: var(--bg-hover, #edebe9) !important;
+  color: var(--ink, #111827) !important;
+}
+
+.symbol-grid-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.symbol-grid-scroll::-webkit-scrollbar-thumb {
+  background: var(--hairline, #d1d5db);
+  border-radius: 4px;
 }
 
 /* =========================================

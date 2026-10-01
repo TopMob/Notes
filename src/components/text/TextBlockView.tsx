@@ -6,6 +6,7 @@ import { Camera, ViewportSize } from '../../types/canvas';
 import { Viewport } from '../../canvas/engine/Viewport';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
+import { convertPowersToSuperscript, handlePowerKeyDown } from '../../utils/mathText';
 
 interface TextBlockViewProps {
   block: TextBlock;
@@ -384,7 +385,77 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       html = html.replace(/\$([^$<>\n\r]+)\$/g, '<span class="katex-rendered-block" data-latex="$1">$$1$</span>');
     }
 
+    // Авто-конвертация введенных степеней вида ^x (например, 2^2, 10^-3, x^2) в <sup>
+    if (html.includes('^')) {
+      html = convertPowersToSuperscript(html);
+    }
+
     updateTextBlock(block.id, { contentHTML: html });
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+
+    // Горячие клавиши для верхнего/нижнего индекса:
+    // Ctrl+. или Ctrl+Shift+= для верхнего индекса (степени)
+    if ((e.ctrlKey || e.metaKey) && (e.key === '.' || (e.shiftKey && (e.key === '=' || e.key === '+')))) {
+      e.preventDefault();
+      document.execCommand('superscript', false);
+      return;
+    }
+    // Ctrl+, для нижнего индекса
+    if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+      e.preventDefault();
+      document.execCommand('subscript', false);
+      return;
+    }
+
+    // Горячие клавиши для выравнивания текста (Ctrl+E по центру, Ctrl+L влево, Ctrl+R вправо, Ctrl+J по ширине)
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      if (e.code === 'KeyE') {
+        e.preventDefault();
+        document.execCommand('justifyCenter', false);
+        return;
+      }
+      if (e.code === 'KeyL') {
+        e.preventDefault();
+        document.execCommand('justifyLeft', false);
+        return;
+      }
+      if (e.code === 'KeyR') {
+        e.preventDefault();
+        document.execCommand('justifyRight', false);
+        return;
+      }
+      if (e.code === 'KeyJ') {
+        e.preventDefault();
+        document.execCommand('justifyFull', false);
+        return;
+      }
+    }
+
+    // Интерактивная авто-конвертация степеней ^x при вводе пробела, Enter или мат. операторов
+    const converted = handlePowerKeyDown(e, () => {
+      if (contentRef.current) {
+        updateTextBlock(block.id, { contentHTML: contentRef.current.innerHTML });
+      }
+    });
+
+    if (converted) {
+      return;
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    const plain = e.clipboardData.getData('text/plain');
+    if (plain && plain.includes('^')) {
+      e.preventDefault();
+      const converted = convertPowersToSuperscript(plain);
+      document.execCommand('insertHTML', false, converted);
+      if (contentRef.current) {
+        updateTextBlock(block.id, { contentHTML: contentRef.current.innerHTML });
+      }
+    }
   };
 
   return (
@@ -440,6 +511,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         ref={contentRef}
         className="text-block-content"
         contentEditable
+        spellCheck
         suppressContentEditableWarning
         data-placeholder="Введите текст..."
         onPointerDown={handleContentPointerDown}
@@ -447,7 +519,9 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         onPointerUp={handleContentPointerUp}
         onDoubleClick={handleDoubleClickContent}
         onBlur={handleBlur}
-        onKeyDown={(e) => e.stopPropagation()}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        onContextMenu={(e) => e.stopPropagation()}
         dangerouslySetInnerHTML={{ __html: block.contentHTML }}
         style={{
           fontSize: `${16 * camera.zoom}px`,

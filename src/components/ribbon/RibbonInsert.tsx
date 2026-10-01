@@ -4,9 +4,11 @@ import {
   Grid3X3,
   Image as ImageIcon,
   ChevronDown,
+  Omega,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { RibbonDropdown } from './RibbonDropdown';
+import { SymbolPickerDropdown } from './SymbolPickerDropdown';
 
 export const RibbonInsert: React.FC = () => {
   const {
@@ -27,6 +29,7 @@ export const RibbonInsert: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const tableBtnRef = useRef<HTMLButtonElement | null>(null);
   const matrixBtnRef = useRef<HTMLButtonElement | null>(null);
+  const symbolBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const toggleDropdown = (name: string) => {
     setActiveDropdown((prev) => {
@@ -73,6 +76,61 @@ export const RibbonInsert: React.FC = () => {
         y: Math.round(-camera.y + 120),
         width: defaultWidth,
         contentHTML: htmlSnippet,
+        zIndex: 10 + textBlocks.length,
+      });
+    }
+  };
+
+  const insertSymbol = (char: string) => {
+    if (!currentPageId) return;
+
+    // Пытаемся вставить прямо в текущую позицию курсора
+    const sel = window.getSelection();
+    let insertedInCursor = false;
+
+    if (sel && sel.rangeCount > 0) {
+      const anchorNode = sel.anchorNode;
+      const el =
+        anchorNode?.nodeType === Node.ELEMENT_NODE
+          ? (anchorNode as HTMLElement)
+          : anchorNode?.parentElement;
+      if (el && el.closest('.text-block-content')) {
+        try {
+          insertedInCursor = document.execCommand('insertText', false, char);
+          if (!insertedInCursor) {
+            insertedInCursor = document.execCommand('insertHTML', false, char);
+          }
+        } catch {
+          // fallback
+        }
+      }
+    }
+
+    if (insertedInCursor) return;
+
+    // Если фокуса нет, но выделен блок - добавляем в него
+    const activeBlockId = selectedTextBlockIds[0];
+    const activeBlock = textBlocks.find((b) => b.id === activeBlockId);
+
+    if (activeBlock) {
+      updateTextBlockWithHistory(
+        activeBlock.id,
+        {
+          contentHTML: activeBlock.contentHTML ? activeBlock.contentHTML + char : `<p>${char}</p>`,
+          width: Math.max(activeBlock.width, 320),
+        },
+        'Вставка символа'
+      );
+    } else {
+      // Иначе создаем новый блок
+      const newId = `tb-${Date.now()}`;
+      addTextBlock({
+        id: newId,
+        pageId: currentPageId,
+        x: Math.round(-camera.x + 100),
+        y: Math.round(-camera.y + 120),
+        width: 360,
+        contentHTML: `<p>${char}</p>`,
         zIndex: 10 + textBlocks.length,
       });
     }
@@ -342,6 +400,31 @@ export const RibbonInsert: React.FC = () => {
           <ImageIcon size={16} />
           <span className="tool-btn-label">Рисунок</span>
         </button>
+      </div>
+
+      <div className="toolbar-divider" />
+
+      {/* 4. Символ */}
+      <div className="toolbar-group">
+        <div className="dropdown-wrapper">
+          <button
+            ref={symbolBtnRef}
+            className={`tool-btn ${activeDropdown === 'symbol' ? 'active' : ''}`}
+            onClick={() => toggleDropdown('symbol')}
+            title="Вставить специальный символ (альфа, омега, бета, корень и др.)"
+          >
+            <Omega size={16} />
+            <span className="tool-btn-label">Символ</span>
+            <ChevronDown size={11} className="chevron" />
+          </button>
+
+          <SymbolPickerDropdown
+            isOpen={activeDropdown === 'symbol'}
+            onClose={closeDropdowns}
+            anchorRef={symbolBtnRef}
+            onInsertSymbol={insertSymbol}
+          />
+        </div>
       </div>
     </div>
   );
