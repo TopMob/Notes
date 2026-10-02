@@ -138,16 +138,20 @@ export const RibbonInsert: React.FC = () => {
 
   // Вставка таблицы
   const insertTable = (rows: number, cols: number) => {
-    let tableHtml = '<table class="notes-table" style="border-collapse: collapse; width: 100%; margin: 8px 0;"><tbody>';
+    let tableHtml = '<table class="onenote-table notes-table" style="border-collapse: collapse; width: max-content; margin: 8px 0;"><colgroup>';
+    for (let c = 0; c < cols; c++) {
+      tableHtml += '<col style="width: 7.5em; min-width: 3.5em;" />';
+    }
+    tableHtml += '</colgroup><tbody>';
     for (let i = 0; i < rows; i++) {
       tableHtml += '<tr>';
       for (let j = 0; j < cols; j++) {
-        tableHtml += '<td style="border: 1px solid #c8c6c4; padding: 6px 10px; min-width: 40px;">&nbsp;</td>';
+        tableHtml += '<td style="border: 1px solid var(--hairline, #c8c6c4); padding: 0.45em 0.75em; word-break: break-word;">&nbsp;</td>';
       }
       tableHtml += '</tr>';
     }
     tableHtml += '</tbody></table><p></p>';
-    insertContent(tableHtml, Math.max(380, cols * 80));
+    insertContent(tableHtml, Math.max(380, cols * 120 + 40));
   };
 
   // Вставка матрицы KaTeX

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import katex from 'katex';
 import { GripHorizontal, X } from 'lucide-react';
 import { TextBlock } from '../../types/textblock';
@@ -41,6 +41,31 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const lastHtmlRef = useRef(block.contentHTML);
+  const currentBlockIdRef = useRef(block.id);
+
+  // Безопасная синхронизация DOM-содержимого без сброса позиции каретки
+  useLayoutEffect(() => {
+    if (!contentRef.current) return;
+    const isDifferentBlock = currentBlockIdRef.current !== block.id;
+    if (isDifferentBlock) {
+      currentBlockIdRef.current = block.id;
+      contentRef.current.innerHTML = block.contentHTML;
+      lastHtmlRef.current = block.contentHTML;
+      return;
+    }
+
+    if (contentRef.current.innerHTML !== block.contentHTML) {
+      const isFocused =
+        document.activeElement === contentRef.current ||
+        contentRef.current.contains(document.activeElement);
+
+      if (!isFocused || block.contentHTML !== lastHtmlRef.current) {
+        contentRef.current.innerHTML = block.contentHTML;
+        lastHtmlRef.current = block.contentHTML;
+      }
+    }
+  }, [block.id, block.contentHTML]);
 
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -220,6 +245,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
           target.innerText = `$${updatedLatex}$`;
         }
         if (contentRef.current) {
+          lastHtmlRef.current = contentRef.current.innerHTML;
           updateTextBlock(block.id, { contentHTML: contentRef.current.innerHTML });
         }
       }
@@ -250,8 +276,10 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       colgroup = document.createElement('colgroup');
       for (let i = 0; i < colCount; i++) {
         const col = document.createElement('col');
-        const measured = firstRow.cells[i]?.offsetWidth || 100;
-        col.style.width = `${measured}px`;
+        const measured = (firstRow.cells[i]?.offsetWidth || 120) / (camera.zoom || 1);
+        const widthEm = `${(Math.max(40, measured) / 16).toFixed(3)}em`;
+        col.style.width = widthEm;
+        col.style.minWidth = '3.5em';
         colgroup.appendChild(col);
       }
       table.insertBefore(colgroup, table.firstChild);
@@ -259,7 +287,8 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
 
     while (colgroup.children.length < colCount) {
       const col = document.createElement('col');
-      col.style.width = '100px';
+      col.style.width = '7.5em';
+      col.style.minWidth = '3.5em';
       colgroup.appendChild(col);
     }
 
@@ -267,43 +296,48 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   };
 
   const handleContentPointerMove = (e: React.PointerEvent) => {
-    // 1. Активный ресайз столбца или строки
+    // 1. Активный ресайз столбца или строки таблицы
     if (tableResizeRef.current) {
       const { cell, type, startX, startY, initialWidth, initialHeight } = tableResizeRef.current;
+      const curZoom = camera.zoom || 1;
+
       if (type === 'col') {
-        const dx = (e.clientX - startX) / camera.zoom;
-        const newWidth = Math.max(35, Math.round(initialWidth + dx));
+        const dx = (e.clientX - startX) / curZoom;
+        const newWorldWidth = Math.max(40, Math.round(initialWidth + dx));
+        const widthEm = `${(newWorldWidth / 16).toFixed(3)}em`;
         const table = cell.closest('table');
         const colIdx = cell.cellIndex;
+
         if (table) {
+          table.style.width = 'max-content';
+          table.style.maxWidth = 'none';
           table.style.tableLayout = 'fixed';
           const cols = ensureTableColGroup(table);
           if (cols[colIdx]) {
-            cols[colIdx].style.width = `${newWidth}px`;
+            cols[colIdx].style.width = widthEm;
+            cols[colIdx].style.minWidth = widthEm;
           }
-
-          let totalWidth = 0;
-          for (let i = 0; i < cols.length; i++) {
-            const w = i === colIdx ? newWidth : (parseFloat(cols[i].style.width) || cols[i].offsetWidth || 100);
-            totalWidth += w;
-          }
-          table.style.width = `${totalWidth}px`;
 
           for (let r = 0; r < table.rows.length; r++) {
             const c = table.rows[r].cells[colIdx];
-            if (c) c.style.width = `${newWidth}px`;
+            if (c) {
+              c.style.width = widthEm;
+              c.style.minWidth = widthEm;
+            }
           }
         } else {
-          cell.style.width = `${newWidth}px`;
+          cell.style.width = widthEm;
+          cell.style.minWidth = widthEm;
         }
       } else if (type === 'row') {
-        const dy = (e.clientY - startY) / camera.zoom;
-        const newHeight = Math.max(24, Math.round(initialHeight + dy));
+        const dy = (e.clientY - startY) / curZoom;
+        const newWorldHeight = Math.max(24, Math.round(initialHeight + dy));
+        const heightEm = `${(newWorldHeight / 16).toFixed(3)}em`;
         const tr = cell.parentElement as HTMLTableRowElement | null;
         if (tr) {
-          tr.style.height = `${newHeight}px`;
+          tr.style.height = heightEm;
           for (let i = 0; i < tr.cells.length; i++) {
-            tr.cells[i].style.height = `${newHeight}px`;
+            tr.cells[i].style.height = heightEm;
           }
         }
       }
@@ -313,7 +347,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
     // 2. Индикация границы ячейки (col-resize или row-resize)
     const target = e.target as HTMLElement | null;
     const cell = target?.closest('th, td') as HTMLTableCellElement | null;
-    if (cell && cell.closest('.onenote-table')) {
+    if (cell && cell.closest('table')) {
       const rect = cell.getBoundingClientRect();
       const isRightBorder = Math.abs(e.clientX - rect.right) <= 6;
       const isBottomBorder = Math.abs(e.clientY - rect.bottom) <= 6;
@@ -331,7 +365,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   const handleContentPointerDown = (e: React.PointerEvent) => {
     const target = e.target as HTMLElement | null;
     const cell = target?.closest('th, td') as HTMLTableCellElement | null;
-    if (cell && cell.closest('.onenote-table') && e.button === 0) {
+    if (cell && cell.closest('table') && e.button === 0) {
       const rect = cell.getBoundingClientRect();
       const isRightBorder = Math.abs(e.clientX - rect.right) <= 6;
       const isBottomBorder = Math.abs(e.clientY - rect.bottom) <= 6;
@@ -341,13 +375,17 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         e.stopPropagation();
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
+        const curZoom = camera.zoom || 1;
+        const tr = cell.parentElement as HTMLTableRowElement | null;
+        const trRect = tr ? tr.getBoundingClientRect() : rect;
+
         tableResizeRef.current = {
           cell,
           type: isRightBorder ? 'col' : 'row',
           startX: e.clientX,
           startY: e.clientY,
-          initialWidth: cell.offsetWidth,
-          initialHeight: (cell.parentElement as HTMLTableRowElement)?.offsetHeight || cell.offsetHeight,
+          initialWidth: rect.width / curZoom,
+          initialHeight: trRect.height / curZoom,
         };
       }
     }
@@ -362,6 +400,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       }
       tableResizeRef.current = null;
       if (contentRef.current) {
+        lastHtmlRef.current = contentRef.current.innerHTML;
         updateTextBlock(block.id, { contentHTML: contentRef.current.innerHTML });
       }
     }
@@ -390,6 +429,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       html = convertPowersToSuperscript(html);
     }
 
+    lastHtmlRef.current = html;
     updateTextBlock(block.id, { contentHTML: html });
   };
 
@@ -437,6 +477,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
     // Интерактивная авто-конвертация степеней ^x при вводе пробела, Enter или мат. операторов
     const converted = handlePowerKeyDown(e, () => {
       if (contentRef.current) {
+        lastHtmlRef.current = contentRef.current.innerHTML;
         updateTextBlock(block.id, { contentHTML: contentRef.current.innerHTML });
       }
     });
@@ -453,6 +494,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       const converted = convertPowersToSuperscript(plain);
       document.execCommand('insertHTML', false, converted);
       if (contentRef.current) {
+        lastHtmlRef.current = contentRef.current.innerHTML;
         updateTextBlock(block.id, { contentHTML: contentRef.current.innerHTML });
       }
     }
@@ -522,7 +564,6 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         onContextMenu={(e) => e.stopPropagation()}
-        dangerouslySetInnerHTML={{ __html: block.contentHTML }}
         style={{
           fontSize: `${16 * camera.zoom}px`,
           lineHeight: 1.5,

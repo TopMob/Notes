@@ -1169,9 +1169,12 @@
   list-style: decimal;
 }
 
-/* OneNote Таблицы */
-.onenote-table {
-  width: 100%;
+/* OneNote Таблицы (фиксированная структура колонок, не сжимается при ресайзе и зуме) */
+.onenote-table,
+.notes-table,
+.text-block-content table {
+  width: max-content;
+  max-width: none;
   table-layout: fixed;
   border-collapse: collapse;
   margin: 10px 0;
@@ -1182,27 +1185,37 @@
   user-select: text;
 }
 
-.onenote-table th {
+.onenote-table th,
+.notes-table th,
+.text-block-content table th {
   background-color: var(--bg-hover);
   font-weight: 600;
   color: var(--ink);
-  padding: 8px 12px;
+  padding: 0.45em 0.75em;
   border: 1px solid var(--hairline);
   text-align: left;
   position: relative;
   box-sizing: border-box;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
-.onenote-table td {
-  padding: 8px 12px;
+.onenote-table td,
+.notes-table td,
+.text-block-content table td {
+  padding: 0.45em 0.75em;
   border: 1px solid var(--hairline);
   color: var(--ink);
-  min-width: 40px;
+  min-width: 3.5em;
   position: relative;
   box-sizing: border-box;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
-.onenote-table tr:hover td {
+.onenote-table tr:hover td,
+.notes-table tr:hover td,
+.text-block-content table tr:hover td {
   background-color: rgba(119, 25, 170, 0.03);
 }
 
