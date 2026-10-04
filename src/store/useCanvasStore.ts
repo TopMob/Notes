@@ -113,6 +113,9 @@ interface CanvasState {
 
   addShape: (shape: ShapeObject) => void;
   removeShape: (shapeId: string) => void;
+  deleteShapesSilent: (shapeIds: string[]) => void;
+  restoreShapesWithDirty: (shapes: ShapeObject[]) => void;
+  updateSelectedShapesColor: (color: string) => void;
 
   addTextBlock: (block: TextBlock) => void;
   updateTextBlock: (id: string, updates: Partial<TextBlock>) => void;
@@ -330,7 +333,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     shapeWidth: 2,
 
     camera: { x: 0, y: 0, zoom: 1 },
-    background: 'ruled',
+    background: 'grid-small',
 
     currentPageId: 'page-default',
     strokes: [],
@@ -410,7 +413,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         selectedShapeIds: [],
         selectedTextBlockIds: [],
         camera: initialCamera ?? { x: 260, y: 150, zoom: 1 },
-        background: initialBg ?? 'plain',
+        background: initialBg ?? 'grid-small',
         saveStatus: 'saved',
         canUndo: false,
         canRedo: false,
@@ -702,6 +705,91 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           }
         },
         description: 'Удаление фигуры',
+      });
+    },
+
+    deleteShapesSilent: (shapeIds) => {
+      if (shapeIds.length === 0) return;
+      const idsSet = new Set(shapeIds);
+      const deletedShapes = get().shapes.filter((s) => idsSet.has(s.id));
+      if (deletedShapes.length === 0) return;
+      const pageId = get().currentPageId;
+
+      set((state) => {
+        const nextShapes = state.shapes.filter((s) => !idsSet.has(s.id));
+        spatialIndex.rebuild([...state.strokes, ...nextShapes]);
+        return { shapes: nextShapes };
+      });
+      if (pageId) {
+        const d = getOrCreateDirty(pageId);
+        for (const id of shapeIds) {
+          d.shapesDelete.add(id);
+          d.shapesPut.delete(id);
+        }
+        scheduleSave(pageId);
+      }
+    },
+
+    restoreShapesWithDirty: (shapes: ShapeObject[]) => {
+      const pageId = get().currentPageId;
+      const currentShapes = get().shapes;
+      const nextShapeIds = new Set(shapes.map((s) => s.id));
+      const removedIds = currentShapes.filter((s) => !nextShapeIds.has(s.id)).map((s) => s.id);
+
+      set({ shapes });
+      spatialIndex.rebuild([...get().strokes, ...shapes]);
+      if (pageId) {
+        const d = getOrCreateDirty(pageId);
+        for (const s of shapes) {
+          d.shapesPut.set(s.id, s);
+          d.shapesDelete.delete(s.id);
+        }
+        for (const id of removedIds) {
+          d.shapesDelete.add(id);
+          d.shapesPut.delete(id);
+        }
+        scheduleSave(pageId);
+      }
+    },
+
+    updateSelectedShapesColor: (color: string) => {
+      const { selectedShapeIds, shapes, currentPageId } = get();
+      if (!selectedShapeIds.length) return;
+      const idSet = new Set(selectedShapeIds);
+      const prevShapes = [...shapes];
+      const updatedShapes = shapes.map((sh) => {
+        if (!idSet.has(sh.id)) return sh;
+        return {
+          ...sh,
+          style: {
+            ...sh.style,
+            color,
+          },
+        };
+      });
+
+      globalCommandStack.execute({
+        execute: () => {
+          set({ shapes: updatedShapes });
+          if (currentPageId) {
+            const d = getOrCreateDirty(currentPageId);
+            for (const sh of updatedShapes) {
+              if (idSet.has(sh.id)) d.shapesPut.set(sh.id, sh);
+            }
+            scheduleSave(currentPageId);
+          }
+        },
+        undo: () => {
+          set({ shapes: prevShapes });
+          if (currentPageId) {
+            const d = getOrCreateDirty(currentPageId);
+            for (const sh of prevShapes) {
+              if (idSet.has(sh.id)) d.shapesPut.set(sh.id, sh);
+            }
+            scheduleSave(currentPageId);
+          }
+        },
+        description: 'Изменение цвета фигуры',
       });
     },
 

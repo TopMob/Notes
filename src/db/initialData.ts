@@ -25,6 +25,6 @@ export const INITIAL_PAGES: Page[] = [
     createdAt: Date.now(),
     order: 0,
     camera: { x: 0, y: 0, zoom: 1 },
-    background: 'ruled',
+    background: 'grid-small',
   },
 ];

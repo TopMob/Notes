@@ -12,6 +12,7 @@ import {
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { useUiStore } from '../../store/useUiStore';
 import { CanvasBackground } from '../../types/canvas';
+import { Viewport } from '../../canvas/engine/Viewport';
 
 export const RibbonView: React.FC = () => {
   const { camera, setCamera, background, setBackground } = useCanvasStore();
@@ -21,25 +22,37 @@ export const RibbonView: React.FC = () => {
     setSettingsOpen,
   } = useUiStore();
 
+  const getCanvasCenter = () => {
+    const canvasEl = document.querySelector('.infinite-canvas-container');
+    if (canvasEl) {
+      const rect = canvasEl.getBoundingClientRect();
+      return {
+        point: { x: rect.width / 2, y: rect.height / 2 },
+        size: { w: rect.width, h: rect.height },
+      };
+    }
+    return {
+      point: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+      size: { w: window.innerWidth, h: window.innerHeight },
+    };
+  };
+
   const handleZoomIn = () => {
-    setCamera((prev) => ({
-      ...prev,
-      zoom: Math.min(5.0, Math.round((prev.zoom + 0.15) * 100) / 100),
-    }));
+    const { point, size } = getCanvasCenter();
+    setCamera((prev) => Viewport.zoomAtPoint(prev, point, 1.2, size));
   };
 
   const handleZoomOut = () => {
-    setCamera((prev) => ({
-      ...prev,
-      zoom: Math.max(0.2, Math.round((prev.zoom - 0.15) * 100) / 100),
-    }));
+    const { point, size } = getCanvasCenter();
+    setCamera((prev) => Viewport.zoomAtPoint(prev, point, 1 / 1.2, size));
   };
 
   const handleZoomReset = () => {
-    setCamera((prev) => ({
-      ...prev,
-      zoom: 1.0,
-    }));
+    const { point, size } = getCanvasCenter();
+    setCamera((prev) => {
+      const factor = 1.0 / prev.zoom;
+      return Viewport.zoomAtPoint(prev, point, factor, size);
+    });
   };
 
   const handleCenterView = () => {

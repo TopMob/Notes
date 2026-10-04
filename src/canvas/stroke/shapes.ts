@@ -8,6 +8,70 @@ export function computeShapeBounds(anchor: Point, end: Point, strokeWidth = 2): 
   return { minX, minY, maxX, maxY };
 }
 
+function distToSegment(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }): number {
+  const l2 = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y);
+  if (l2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
+}
+
+export function isShapeHitByEraser(shape: ShapeObject, center: { x: number; y: number }, radius: number): boolean {
+  const effRadius = radius + (shape.style.width || 2) / 2;
+  const { anchor, end, type } = shape;
+
+  // Быстрый AABB тест
+  if (
+    center.x + effRadius < shape.bounds.minX ||
+    center.x - effRadius > shape.bounds.maxX ||
+    center.y + effRadius < shape.bounds.minY ||
+    center.y - effRadius > shape.bounds.maxY
+  ) {
+    return false;
+  }
+
+  if (type === 'line' || type === 'arrow') {
+    return distToSegment(center, anchor, end) <= effRadius;
+  }
+
+  if (type === 'rect') {
+    const x1 = Math.min(anchor.x, end.x);
+    const x2 = Math.max(anchor.x, end.x);
+    const y1 = Math.min(anchor.y, end.y);
+    const y2 = Math.max(anchor.y, end.y);
+    const dTop = distToSegment(center, { x: x1, y: y1 }, { x: x2, y: y1 });
+    const dBottom = distToSegment(center, { x: x1, y: y2 }, { x: x2, y: y2 });
+    const dLeft = distToSegment(center, { x: x1, y: y1 }, { x: x1, y: y2 });
+    const dRight = distToSegment(center, { x: x2, y: y1 }, { x: x2, y: y2 });
+    return Math.min(dTop, dBottom, dLeft, dRight) <= effRadius;
+  }
+
+  if (type === 'ellipse') {
+    const rx = Math.abs(end.x - anchor.x) / 2;
+    const ry = Math.abs(end.y - anchor.y) / 2;
+    if (rx === 0 || ry === 0) return false;
+    const cx = Math.min(anchor.x, end.x) + rx;
+    const cy = Math.min(anchor.y, end.y) + ry;
+    // Расстояние от центра эллипса до точки
+    const angle = Math.atan2(center.y - cy, center.x - cx);
+    const perimeterX = cx + rx * Math.cos(angle);
+    const perimeterY = cy + ry * Math.sin(angle);
+    return Math.hypot(center.x - perimeterX, center.y - perimeterY) <= effRadius;
+  }
+
+  if (type === 'axis') {
+    const originX = Math.min(anchor.x, end.x);
+    const originY = Math.max(anchor.y, end.y);
+    const topY = Math.min(anchor.y, end.y);
+    const rightX = Math.max(anchor.x, end.x);
+    const dY = distToSegment(center, { x: originX, y: originY }, { x: originX, y: topY });
+    const dX = distToSegment(center, { x: originX, y: originY }, { x: rightX, y: originY });
+    return Math.min(dY, dX) <= effRadius;
+  }
+
+  return false;
+}
+
 export function snapShapeEndPoint(anchor: Point, current: Point, type: ShapeObject['type']): Point {
   const dx = current.x - anchor.x;
   const dy = current.y - anchor.y;

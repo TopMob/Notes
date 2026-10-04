@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { Plus, MoreVertical, Trash2, Edit2, Link, Check } from 'lucide-react';
 import { useNotebookStore } from '../../store/useNotebookStore';
 import { useUiStore } from '../../store/useUiStore';
 import { Page } from '../../types/notebook';
 import { formatPageUrl, titleToSlug } from '../../utils/slug';
+import { PopoverMenu } from '../common/PopoverMenu';
 
 export const PagesList: React.FC = () => {
   const {
@@ -18,40 +19,32 @@ export const PagesList: React.FC = () => {
 
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
-  const [activeMenuPageId, setActiveMenuPageId] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ pageId: string; anchor: HTMLElement } | null>(null);
   const [copiedPageId, setCopiedPageId] = useState<string | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const renameCancelledRef = useRef(false);
 
-  // Закрытие контекстного меню при клике вне его
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setActiveMenuPageId(null);
-      }
-    };
-    if (activeMenuPageId) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [activeMenuPageId]);
+  const closeMenu = useCallback(() => setMenu(null), []);
 
   const handleAddPage = async () => {
     await addPage();
   };
 
   const handleStartRename = (page: Page) => {
+    renameCancelledRef.current = false;
     setEditingPageId(page.id);
     setEditingTitle(page.title);
-    setActiveMenuPageId(null);
+    setMenu(null);
   };
 
   const handleFinishRename = async () => {
-    if (editingPageId && editingTitle.trim()) {
-      await renamePage(editingPageId, editingTitle.trim());
-    }
+    const id = editingPageId;
+    const title = editingTitle.trim();
+    const cancelled = renameCancelledRef.current;
+    renameCancelledRef.current = false;
     setEditingPageId(null);
+    if (id && title && !cancelled) {
+      await renamePage(id, title);
+    }
   };
 
   const handleCopyLink = async (page: Page) => {
@@ -64,8 +57,10 @@ export const PagesList: React.FC = () => {
     } catch {
       // fallback
     }
-    setActiveMenuPageId(null);
+    setMenu(null);
   };
+
+  const menuPage = menu ? pages.find((p) => p.id === menu.pageId) : undefined;
 
   return (
     <div className="sidebar-column pages-column">
@@ -80,12 +75,12 @@ export const PagesList: React.FC = () => {
         {pages.map((page) => {
           const isActive = page.id === activePage?.id;
           const isEditing = page.id === editingPageId;
-          const isMenuOpen = activeMenuPageId === page.id;
+          const isMenuOpen = menu?.pageId === page.id;
 
           return (
             <div
               key={page.id}
-              className={`page-item ${isActive ? 'active' : ''}`}
+              className={`page-item ${isActive ? 'active' : ''} ${isMenuOpen ? 'menu-open' : ''} ${isEditing ? 'editing' : ''}`}
               onClick={() => selectPage(page)}
               onDoubleClick={() => handleStartRename(page)}
             >
@@ -97,68 +92,78 @@ export const PagesList: React.FC = () => {
                   onChange={(e) => setEditingTitle(e.target.value)}
                   onBlur={handleFinishRename}
                   onKeyDown={(e) => {
+                    e.stopPropagation();
                     if (e.key === 'Enter') handleFinishRename();
-                    if (e.key === 'Escape') setEditingPageId(null);
+                    if (e.key === 'Escape') {
+                      renameCancelledRef.current = true;
+                      setEditingPageId(null);
+                    }
                   }}
+                  onFocus={(e) => e.currentTarget.select()}
+                  maxLength={120}
                   autoFocus
                   onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
                 />
               ) : (
-                <span className="item-title">{page.title}</span>
+                <span className="item-title" title={page.title}>{page.title}</span>
               )}
 
               {/* Меню действий */}
-              <div
-                className="item-actions"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <button
-                  className="item-more-btn"
-                  onClick={() =>
-                    setActiveMenuPageId(isMenuOpen ? null : page.id)
-                  }
-                  title="Параметры страницы"
+              {!isEditing && (
+                <div
+                  className="item-actions"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <MoreVertical size={13} />
-                </button>
+                  <button
+                    className="item-more-btn"
+                    onClick={(e) => {
+                      const anchor = e.currentTarget;
+                      setMenu(isMenuOpen ? null : { pageId: page.id, anchor });
+                    }}
+                    title="Параметры страницы"
+                  >
+                    <MoreVertical size={13} />
+                  </button>
 
-                {isMenuOpen && (
-                  <div ref={menuRef} className="dropdown-menu item-context-menu">
-                    <button
-                      className="dropdown-item"
-                      onClick={() => handleCopyLink(page)}
-                    >
-                      {copiedPageId === page.id ? (
-                        <Check size={13} style={{ color: 'var(--brand-green, #107c41)' }} />
-                      ) : (
-                        <Link size={13} />
-                      )}
-                      <span>
-                        {copiedPageId === page.id ? 'Ссылка скопирована!' : 'Копировать ссылку'}
-                      </span>
-                    </button>
-                    <button
-                      className="dropdown-item"
-                      onClick={() => handleStartRename(page)}
-                    >
-                      <Edit2 size={13} />
-                      <span>Переименовать</span>
-                    </button>
-                    {pages.length > 1 && (
+                  {isMenuOpen && menuPage && (
+                    <PopoverMenu anchorEl={menu!.anchor} onClose={closeMenu} width={208}>
                       <button
-                        className="dropdown-item danger"
-                        onClick={() => {
-                          setActiveMenuPageId(null);
-                          openDeleteConfirm('page', page.id, page.title);
-                        }}
+                        className="dropdown-item"
+                        onClick={() => handleCopyLink(menuPage)}
                       >
-                        <Trash2 size={13} />
-                        <span>Удалить в корзину</span>
+                        {copiedPageId === menuPage.id ? (
+                          <Check size={13} style={{ color: 'var(--status-success)' }} />
+                        ) : (
+                          <Link size={13} />
+                        )}
+                        <span>
+                          {copiedPageId === menuPage.id ? 'Ссылка скопирована!' : 'Копировать ссылку'}
+                        </span>
                       </button>
-                    )}
-                  </div>
-                )}
-              </div>
+                      <button
+                        className="dropdown-item"
+                        onClick={() => handleStartRename(menuPage)}
+                      >
+                        <Edit2 size={13} />
+                        <span>Переименовать</span>
+                      </button>
+                      {pages.length > 1 && (
+                        <button
+                          className="dropdown-item danger"
+                          onClick={() => {
+                            setMenu(null);
+                            openDeleteConfirm('page', menuPage.id, menuPage.title);
+                          }}
+                        >
+                          <Trash2 size={13} />
+                          <span>Удалить в корзину</span>
+                        </button>
+                      )}
+                    </PopoverMenu>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}

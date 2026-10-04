@@ -29,6 +29,9 @@ export function isBlockEmpty(container: HTMLElement): boolean {
   return !hasText && !hasStructuralContent;
 }
 
+/** Минимальная ширина текстового блока (мировые единицы) — можно сжимать почти до точки */
+export const MIN_TEXT_BLOCK_WIDTH = 24;
+
 export const TextBlockView: React.FC<TextBlockViewProps> = ({
   block,
   camera,
@@ -47,12 +50,13 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0, blockX: block.x, blockY: block.y });
   const [resizeStart, setResizeStart] = useState({ startX: 0, initialWidth: block.width });
 
-  // Измерение высоты контейнера для идеального хитбокса
+  // Измерение высоты контейнера для идеального хитбокса.
+  // offsetHeight не зависит от CSS transform, поэтому это уже высота в мировых единицах.
   useEffect(() => {
     if (!containerRef.current) return;
     const updateHeight = () => {
       if (containerRef.current) {
-        const measuredHeight = Math.round(containerRef.current.offsetHeight / (camera.zoom || 1));
+        const measuredHeight = Math.round(containerRef.current.offsetHeight);
         setTextBlockHeight(block.id, measuredHeight);
       }
     };
@@ -66,7 +70,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
     return () => {
       if (ro) ro.disconnect();
     };
-  }, [block.id, block.contentHTML, block.width, camera.zoom, setTextBlockHeight]);
+  }, [block.id, block.contentHTML, block.width, setTextBlockHeight]);
 
   // Авто-фокус при создании пустого блока
   useEffect(() => {
@@ -174,7 +178,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   const handleResizePointerMove = (e: React.PointerEvent) => {
     if (!isResizing) return;
     const dx = (e.clientX - resizeStart.startX) / camera.zoom;
-    const newWidth = Math.max(180, Math.round(resizeStart.initialWidth + dx));
+    const newWidth = Math.max(MIN_TEXT_BLOCK_WIDTH, Math.round(resizeStart.initialWidth + dx));
 
     updateTextBlock(block.id, { width: newWidth });
   };
@@ -466,7 +470,9 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         position: 'absolute',
         left: `${screenPos.x}px`,
         top: `${screenPos.y}px`,
-        width: `${block.width * camera.zoom}px`,
+        width: `${block.width}px`,
+        transform: `scale(${camera.zoom})`,
+        transformOrigin: '0 0',
         zIndex: block.zIndex,
       }}
       onClick={() => {
@@ -524,7 +530,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         onContextMenu={(e) => e.stopPropagation()}
         dangerouslySetInnerHTML={{ __html: block.contentHTML }}
         style={{
-          fontSize: `${16 * camera.zoom}px`,
+          fontSize: '16px',
           lineHeight: 1.5,
           cursor: 'text',
         }}

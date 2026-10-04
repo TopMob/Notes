@@ -34,6 +34,11 @@ export const RibbonDraw: React.FC = () => {
     updateQuickColor,
     shapeType,
     setShapeType,
+    shapeColor,
+    setShapeColor,
+    shapeWidth,
+    setShapeWidth,
+    updateSelectedShapesColor,
     deleteSelectedItems,
     selectedStrokeIds,
     selectedShapeIds,
@@ -68,14 +73,27 @@ export const RibbonDraw: React.FC = () => {
     selectedShapeIds.length > 0 ||
     selectedTextBlockIds.length > 0;
 
+  const currentColor = activeTool === 'shape' || selectedShapeIds.length > 0 ? shapeColor : penColor;
+
   const handleColorClick = (color: string, index: number) => {
-    if (penColor === color) {
+    if (currentColor === color) {
       // Второе нажатие: открываем выбор палитры для замены этого слота
       setEditingColorIndex(index);
     } else {
-      setPenColor(color);
+      if (activeTool === 'shape' || selectedShapeIds.length > 0) {
+        setShapeColor(color);
+        updateSelectedShapesColor(color);
+      } else {
+        setPenColor(color);
+        setShapeColor(color); // синхронизируем цвет фигур, чтобы новые фигуры рисовались этим же цветом
+        if (selectedShapeIds.length > 0) {
+          updateSelectedShapesColor(color);
+        }
+        if (activeTool !== 'pen' && activeTool !== 'highlighter') {
+          setActiveTool('pen');
+        }
+      }
       setEditingColorIndex(null);
-      if (activeTool !== 'pen') setActiveTool('pen');
     }
   };
 
@@ -245,7 +263,7 @@ export const RibbonDraw: React.FC = () => {
         {quickColors.map((color, idx) => (
           <div key={idx} className="color-swatch-wrapper" style={{ position: 'relative' }}>
             <button
-              className={`color-swatch-btn ${penColor === color ? 'selected' : ''}`}
+              className={`color-swatch-btn ${currentColor === color ? 'selected' : ''}`}
               style={{ backgroundColor: color }}
               onClick={() => handleColorClick(color, idx)}
               title={`Цвет ${color} (кликните повторно, чтобы изменить слот)`}
@@ -257,7 +275,13 @@ export const RibbonDraw: React.FC = () => {
                 autoFocus
                 onChange={(e) => {
                   updateQuickColor(idx, e.target.value);
-                  setPenColor(e.target.value);
+                  if (activeTool === 'shape' || selectedShapeIds.length > 0) {
+                    setShapeColor(e.target.value);
+                    updateSelectedShapesColor(e.target.value);
+                  } else {
+                    setPenColor(e.target.value);
+                    setShapeColor(e.target.value);
+                  }
                 }}
                 onBlur={() => setEditingColorIndex(null)}
                 style={{
@@ -279,10 +303,19 @@ export const RibbonDraw: React.FC = () => {
           <Palette size={16} />
           <input
             type="color"
-            value={penColor}
+            value={currentColor}
             onChange={(e) => {
-              setPenColor(e.target.value);
-              if (activeTool !== 'pen') setActiveTool('pen');
+              const val = e.target.value;
+              if (activeTool === 'shape' || selectedShapeIds.length > 0) {
+                setShapeColor(val);
+                updateSelectedShapesColor(val);
+              } else {
+                setPenColor(val);
+                setShapeColor(val);
+                if (activeTool !== 'pen' && activeTool !== 'highlighter') {
+                  setActiveTool('pen');
+                }
+              }
             }}
             className="hidden-color-input"
           />
@@ -298,10 +331,10 @@ export const RibbonDraw: React.FC = () => {
             ref={widthBtnRef}
             className="tool-btn"
             onClick={() => setIsWidthMenuOpen(!isWidthMenuOpen)}
-            title="Толщина пера (кликните для настройки ползунком)"
+            title="Толщина линии пера или фигуры (кликните для настройки)"
           >
-            <Minus size={16} strokeWidth={Math.min(6, Math.max(1.5, penWidth))} />
-            <span className="tool-btn-label">{penWidth} px</span>
+            <Minus size={16} strokeWidth={Math.min(6, Math.max(1.5, activeTool === 'shape' ? shapeWidth : penWidth))} />
+            <span className="tool-btn-label">{activeTool === 'shape' ? shapeWidth : penWidth} px</span>
             <ChevronDown size={11} className="chevron" />
           </button>
 
@@ -315,15 +348,19 @@ export const RibbonDraw: React.FC = () => {
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
               <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text-secondary)' }}>
-                Толщина линии:
+                {activeTool === 'shape' ? 'Толщина фигуры:' : 'Толщина линии:'}
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <input
                   type="number"
                   min="1"
                   max="50"
-                  value={penWidth}
-                  onChange={(e) => setPenWidth(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
+                  value={activeTool === 'shape' ? shapeWidth : penWidth}
+                  onChange={(e) => {
+                    const val = Math.max(1, Math.min(50, Number(e.target.value) || 1));
+                    setPenWidth(val);
+                    setShapeWidth(val);
+                  }}
                   style={{
                     width: '46px',
                     padding: '2px 4px',
@@ -345,8 +382,12 @@ export const RibbonDraw: React.FC = () => {
               min="1"
               max="40"
               step="1"
-              value={penWidth}
-              onChange={(e) => setPenWidth(Number(e.target.value))}
+              value={activeTool === 'shape' ? shapeWidth : penWidth}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                setPenWidth(val);
+                setShapeWidth(val);
+              }}
               style={{ width: '100%', cursor: 'pointer', margin: '6px 0 10px 0' }}
             />
 
@@ -365,10 +406,10 @@ export const RibbonDraw: React.FC = () => {
             >
               <div
                 style={{
-                  height: `${Math.min(28, penWidth)}px`,
+                  height: `${Math.min(28, activeTool === 'shape' ? shapeWidth : penWidth)}px`,
                   width: '100%',
-                  backgroundColor: penColor,
-                  borderRadius: `${penWidth / 2}px`,
+                  backgroundColor: currentColor,
+                  borderRadius: `${(activeTool === 'shape' ? shapeWidth : penWidth) / 2}px`,
                 }}
               />
             </div>
@@ -378,10 +419,11 @@ export const RibbonDraw: React.FC = () => {
               {[1, 3, 5, 8, 16, 24].map((w) => (
                 <button
                   key={w}
-                  className={`tool-btn icon-only ${penWidth === w ? 'active' : ''}`}
+                  className={`tool-btn icon-only ${(activeTool === 'shape' ? shapeWidth : penWidth) === w ? 'active' : ''}`}
                   style={{ flex: 1, height: '24px', fontSize: '11px' }}
                   onClick={() => {
                     setPenWidth(w);
+                    setShapeWidth(w);
                     setIsWidthMenuOpen(false);
                   }}
                 >
@@ -407,11 +449,13 @@ export const RibbonDraw: React.FC = () => {
             }}
             title="Фигуры (линия, стрелка, прямоугольник, эллипс, оси)"
           >
-            {shapeType === 'rect' && <Square size={16} />}
-            {shapeType === 'ellipse' && <Circle size={16} />}
-            {shapeType === 'line' && <Minus size={16} />}
-            {shapeType === 'arrow' && <ArrowUpRight size={16} />}
-            {shapeType === 'axis' && <SplitSquareVertical size={16} />}
+            <span style={{ display: 'inline-flex', color: shapeColor }}>
+              {shapeType === 'rect' && <Square size={16} />}
+              {shapeType === 'ellipse' && <Circle size={16} />}
+              {shapeType === 'line' && <Minus size={16} />}
+              {shapeType === 'arrow' && <ArrowUpRight size={16} />}
+              {shapeType === 'axis' && <SplitSquareVertical size={16} />}
+            </span>
             <span className="tool-btn-label">Фигуры</span>
             <ChevronDown size={11} className="chevron" />
           </button>
@@ -420,7 +464,7 @@ export const RibbonDraw: React.FC = () => {
             isOpen={isShapeMenuOpen}
             onClose={() => setIsShapeMenuOpen(false)}
             anchorRef={shapeBtnRef}
-            minWidth={180}
+            minWidth={200}
           >
             <button
               className={`dropdown-item ${shapeType === 'line' ? 'active' : ''}`}
@@ -477,6 +521,40 @@ export const RibbonDraw: React.FC = () => {
               <SplitSquareVertical size={15} />
               <span>Оси координат X/Y</span>
             </button>
+
+            {/* Быстрый выбор цвета фигуры прямо в меню */}
+            <div style={{ padding: '8px 12px 6px', borderTop: '1px solid var(--hairline)', marginTop: '4px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--ink-secondary)', marginBottom: '6px', fontWeight: 600 }}>
+                Цвет фигуры:
+              </div>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                {quickColors.map((color, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    className={`color-swatch-btn ${shapeColor === color ? 'selected' : ''}`}
+                    style={{ backgroundColor: color, width: '22px', height: '22px', borderRadius: '50%' }}
+                    onClick={() => {
+                      setShapeColor(color);
+                      updateSelectedShapesColor(color);
+                    }}
+                    title={`Цвет ${color}`}
+                  />
+                ))}
+                <label className="color-picker-label" style={{ marginLeft: '4px', width: '22px', height: '22px' }} title="Выбрать свой цвет для фигур">
+                  <Palette size={14} />
+                  <input
+                    type="color"
+                    value={shapeColor}
+                    onChange={(e) => {
+                      setShapeColor(e.target.value);
+                      updateSelectedShapesColor(e.target.value);
+                    }}
+                    className="hidden-color-input"
+                  />
+                </label>
+              </div>
+            </div>
           </RibbonDropdown>
         </div>
 
