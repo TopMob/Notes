@@ -151,6 +151,10 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
 
   const handleDragPointerMove = (e: React.PointerEvent) => {
     if (!isDragging) return;
+    if (e.pointerType === 'mouse' && (e.buttons & 1) === 0) {
+      handleDragPointerUp(e);
+      return;
+    }
     const dx = (e.clientX - dragStart.x) / camera.zoom;
     const dy = (e.clientY - dragStart.y) / camera.zoom;
 
@@ -202,6 +206,10 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
 
   const handleResizePointerMove = (e: React.PointerEvent) => {
     if (!isResizing) return;
+    if (e.pointerType === 'mouse' && (e.buttons & 1) === 0) {
+      handleResizePointerUp(e);
+      return;
+    }
     const dx = (e.clientX - resizeStart.startX) / camera.zoom;
     const newWidth = Math.max(MIN_TEXT_BLOCK_WIDTH, Math.round(resizeStart.initialWidth + dx));
 
@@ -302,6 +310,10 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   const handleContentPointerMove = (e: React.PointerEvent) => {
     // 1. Активный ресайз столбца или строки таблицы
     if (tableResizeRef.current) {
+      if (e.pointerType === 'mouse' && (e.buttons & 1) === 0) {
+        handleContentPointerUp(e);
+        return;
+      }
       const { cell, type, startX, startY, initialWidth, initialHeight } = tableResizeRef.current;
       const curZoom = camera.zoom || 1;
 

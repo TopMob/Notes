@@ -85,6 +85,15 @@ export const InfiniteCanvas: React.FC = () => {
   const cursorWorldPosRef = useRef<{ x: number; y: number } | null>(null);
   const isMouseChordActiveRef = useRef(false);
   const lastMouseChordTimeRef = useRef(0);
+  const handleSinglePointerUpRef = useRef<((e: React.PointerEvent | PointerEvent) => void) | null>(null);
+  const cancelActiveStrokeRef = useRef<(() => void) | null>(null);
+
+  // Сброс временных инлайн-стилей курсора при смене инструмента
+  useEffect(() => {
+    if (containerRef.current && containerRef.current.style.cursor) {
+      containerRef.current.style.cursor = '';
+    }
+  }, [activeTool]);
 
   // Динамический Resize listener: реагирует на окно и ResizeObserver контейнера
   useEffect(() => {
@@ -678,9 +687,19 @@ export const InfiniteCanvas: React.FC = () => {
       checkAndHandleMouseChordRef.current(e);
     };
 
-    const onMouseUpNative = (e: MouseEvent) => {
+    const onWindowPointerUp = (e: PointerEvent | MouseEvent) => {
       if ((e.buttons & 1) === 0 || (e.buttons & 2) === 0) {
         isMouseChordActiveRef.current = false;
+      }
+      if (e.buttons === 0) {
+        if (
+          panStartRef.current ||
+          moveDragStartRef.current ||
+          isPointerDownRef.current ||
+          isRightClickEraserRef.current
+        ) {
+          handleSinglePointerUpRef.current?.(e as unknown as React.PointerEvent);
+        }
       }
     };
 
@@ -697,19 +716,31 @@ export const InfiniteCanvas: React.FC = () => {
 
     const onWindowBlur = () => {
       isMouseChordActiveRef.current = false;
+      isSpacePressedRef.current = false;
+      if (containerRef.current && containerRef.current.style.cursor) {
+        containerRef.current.style.cursor = '';
+      }
+      if (
+        panStartRef.current ||
+        moveDragStartRef.current ||
+        isPointerDownRef.current ||
+        isRightClickEraserRef.current
+      ) {
+        cancelActiveStrokeRef.current?.();
+      }
     };
 
     container.addEventListener('mousedown', onMouseDownNative, { capture: true });
-    window.addEventListener('mouseup', onMouseUpNative, { capture: true });
-    window.addEventListener('pointerup', onMouseUpNative, { capture: true });
+    window.addEventListener('mouseup', onWindowPointerUp, { capture: true });
+    window.addEventListener('pointerup', onWindowPointerUp, { capture: true });
     window.addEventListener('blur', onWindowBlur);
     container.addEventListener('contextmenu', onContextMenuNative, { capture: true });
     container.addEventListener('wheel', onWheelNative, { passive: false });
 
     return () => {
       container.removeEventListener('mousedown', onMouseDownNative, { capture: true });
-      window.removeEventListener('mouseup', onMouseUpNative, { capture: true });
-      window.removeEventListener('pointerup', onMouseUpNative, { capture: true });
+      window.removeEventListener('mouseup', onWindowPointerUp, { capture: true });
+      window.removeEventListener('pointerup', onWindowPointerUp, { capture: true });
       window.removeEventListener('blur', onWindowBlur);
       container.removeEventListener('contextmenu', onContextMenuNative, { capture: true });
       container.removeEventListener('wheel', onWheelNative);
@@ -1038,6 +1069,15 @@ export const InfiniteCanvas: React.FC = () => {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
+    // Защита от залипания: если указатель — мышь и ни одна кнопка не зажата (buttons === 0),
+    // немедленно завершаем любые активные действия (панорамирование, перемещение, рисование, ластик)
+    if (e.pointerType === 'mouse' && e.buttons === 0) {
+      if (panStartRef.current || moveDragStartRef.current || isPointerDownRef.current || isRightClickEraserRef.current) {
+        handleSinglePointerUp(e);
+        return;
+      }
+    }
+
     // Панорамирование
     if (panStartRef.current) {
       const dx = (e.clientX - panStartRef.current.clientX) / camera.zoom;
@@ -1081,12 +1121,14 @@ export const InfiniteCanvas: React.FC = () => {
           worldPos.y <= bounds.maxY + pad;
         if (isInsideSelection) {
           containerRef.current.style.cursor = 'move';
-        } else {
+        } else if (containerRef.current.style.cursor === 'move') {
           containerRef.current.style.cursor = '';
         }
-      } else if (containerRef.current) {
+      } else if (containerRef.current && containerRef.current.style.cursor === 'move') {
         containerRef.current.style.cursor = '';
       }
+    } else if (containerRef.current && containerRef.current.style.cursor === 'move') {
+      containerRef.current.style.cursor = '';
     }
 
     // ПКМ точечный ластик при зажатой правой кнопке мыши
@@ -1247,18 +1289,26 @@ export const InfiniteCanvas: React.FC = () => {
     }
   }, []);
 
-  const handleSinglePointerUp = (e: React.PointerEvent) => {
+  const releasePointerCaptureSafely = (e: React.PointerEvent | PointerEvent) => {
+    try {
+      if (containerRef.current?.hasPointerCapture?.(e.pointerId)) {
+        containerRef.current.releasePointerCapture(e.pointerId);
+      } else if ('currentTarget' in e && (e.currentTarget as HTMLElement)?.hasPointerCapture?.(e.pointerId)) {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleSinglePointerUp = (e: React.PointerEvent | PointerEvent) => {
     if ((e.buttons & 1) === 0 || (e.buttons & 2) === 0) {
       isMouseChordActiveRef.current = false;
     }
 
     if (panStartRef.current) {
       panStartRef.current = null;
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
+      releasePointerCaptureSafely(e);
       return;
     }
 
@@ -1275,11 +1325,7 @@ export const InfiniteCanvas: React.FC = () => {
       if (containerRef.current) {
         containerRef.current.style.cursor = '';
       }
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
+      releasePointerCaptureSafely(e);
       return;
     }
 
@@ -1289,22 +1335,14 @@ export const InfiniteCanvas: React.FC = () => {
       isRightClickEraserRef.current = false;
       isPointerDownRef.current = false;
       renderSelectionAndCursorLayer();
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
+      releasePointerCaptureSafely(e);
       return;
     }
 
     if (!isPointerDownRef.current) return;
     isPointerDownRef.current = false;
 
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
+    releasePointerCaptureSafely(e);
 
     // Завершение штриха пера / маркера
     if (activeTool === 'pen' || activeTool === 'highlighter') {
@@ -1557,6 +1595,8 @@ export const InfiniteCanvas: React.FC = () => {
   gestureCallbacksRef.current.onSinglePointerMove = (e) => handleSinglePointerMove(e as React.PointerEvent);
   gestureCallbacksRef.current.onSinglePointerUp = (e) => handleSinglePointerUp(e as React.PointerEvent);
   gestureCallbacksRef.current.onCancelActiveStroke = cancelActiveStroke;
+  handleSinglePointerUpRef.current = handleSinglePointerUp;
+  cancelActiveStrokeRef.current = cancelActiveStroke;
 
   if (!gestureManagerRef.current) {
     gestureManagerRef.current = new GestureManager(
@@ -1599,6 +1639,11 @@ export const InfiniteCanvas: React.FC = () => {
     if (cursorWorldPosRef.current) {
       cursorWorldPosRef.current = null;
       renderSelectionAndCursorLayer();
+    }
+    if (!moveDragStartRef.current && !panStartRef.current && !isPointerDownRef.current) {
+      if (containerRef.current && containerRef.current.style.cursor) {
+        containerRef.current.style.cursor = '';
+      }
     }
   };
 
