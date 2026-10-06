@@ -267,7 +267,7 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       updatedAt: now,
       order: 0,
       camera: { x: 0, y: 0, zoom: 1 },
-      background: 'plain',
+      background: 'grid-small',
       slug: firstPageSlug,
       slugAliases: [],
     };
@@ -417,7 +417,7 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       createdAt: Date.now(),
       order: 0,
       camera: { x: 0, y: 0, zoom: 1 },
-      background: 'plain',
+      background: 'grid-small',
       slug: pageSlug,
       slugAliases: [],
     };
@@ -463,7 +463,7 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       createdAt: Date.now(),
       order: pages.length,
       camera: { x: 0, y: 0, zoom: 1 },
-      background: 'plain',
+      background: 'grid-small',
       slug: pageSlug,
       slugAliases: [],
     };

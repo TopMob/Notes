@@ -92,7 +92,7 @@ export const ExportModal: React.FC = () => {
       ctx.stroke();
       ctx.restore();
     } else if (background === 'grid-small' || background === 'grid-large') {
-      const gridSize = background === 'grid-small' ? 24 : 40;
+      const gridSize = background === 'grid-small' ? 20 : 40;
       const startX = Math.floor((minX - padding) / gridSize) * gridSize;
       const endX = Math.ceil((maxX + padding) / gridSize) * gridSize;
       const startY = Math.floor((minY - padding) / gridSize) * gridSize;

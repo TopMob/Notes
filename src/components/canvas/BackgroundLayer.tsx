@@ -64,7 +64,7 @@ export const BackgroundLayer: React.FC<BackgroundLayerProps> = ({
       ctx.restore();
     } else if (background === 'grid-small' || background === 'grid-large') {
       // Тетрадь в клетку
-      const gridSize = background === 'grid-small' ? 24 : 40;
+      const gridSize = background === 'grid-small' ? 20 : 40;
       const startX = Math.floor(bounds.minX / gridSize) * gridSize;
       const endX = Math.ceil(bounds.maxX / gridSize) * gridSize;
       const startY = Math.floor(bounds.minY / gridSize) * gridSize;

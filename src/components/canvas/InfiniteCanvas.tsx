@@ -4,7 +4,7 @@ import { Viewport } from '../../canvas/engine/Viewport';
 import { BackgroundLayer } from './BackgroundLayer';
 import { TextOverlay } from '../text/TextOverlay';
 import { drawStrokeToCanvas } from '../../canvas/stroke/freehand';
-import { drawShapeToCanvas, snapShapeEndPoint, computeShapeBounds } from '../../canvas/stroke/shapes';
+import { drawShapeToCanvas, snapShapeEndPoint, computeShapeBounds, isShapeHitByEraser } from '../../canvas/stroke/shapes';
 import { simplifyDouglasPeucker } from '../../canvas/stroke/simplify';
 import { erasePointsFromStroke } from '../../canvas/stroke/eraser';
 import { Point, Stroke, ShapeObject, ViewportSize } from '../../types/canvas';
@@ -46,6 +46,7 @@ export const InfiniteCanvas: React.FC = () => {
     deleteStrokesSilent,
     replaceStrokesSilent,
     addShape,
+    deleteShapesSilent,
     spatialIndex,
     selectedStrokeIds,
     selectedShapeIds,
@@ -80,6 +81,7 @@ export const InfiniteCanvas: React.FC = () => {
     textBlocks: TextBlock[];
   } | null>(null);
   const eraserInitialStrokesRef = useRef<Stroke[] | null>(null);
+  const eraserInitialShapesRef = useRef<ShapeObject[] | null>(null);
   const cursorWorldPosRef = useRef<{ x: number; y: number } | null>(null);
   const isMouseChordActiveRef = useRef(false);
   const lastMouseChordTimeRef = useRef(0);
@@ -560,6 +562,10 @@ export const InfiniteCanvas: React.FC = () => {
       useCanvasStore.getState().restoreStrokesWithDirty(eraserInitialStrokesRef.current);
       eraserInitialStrokesRef.current = null;
     }
+    if (eraserInitialShapesRef.current) {
+      useCanvasStore.getState().restoreShapesWithDirty(eraserInitialShapesRef.current);
+      eraserInitialShapesRef.current = null;
+    }
     if (dragInitialSnapshotRef.current) {
       useCanvasStore.setState({
         strokes: dragInitialSnapshotRef.current.strokes,
@@ -758,6 +764,7 @@ export const InfiniteCanvas: React.FC = () => {
         isPointerDownRef.current = true;
         isRightClickEraserRef.current = true;
         eraserInitialStrokesRef.current = [...useCanvasStore.getState().strokes];
+        eraserInitialShapesRef.current = [...useCanvasStore.getState().shapes];
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
         handleEraserErase(worldPos);
         cursorWorldPosRef.current = worldPos;
@@ -915,37 +922,25 @@ export const InfiniteCanvas: React.FC = () => {
       }
       isPointerDownRef.current = true;
       eraserInitialStrokesRef.current = [...useCanvasStore.getState().strokes];
+      eraserInitialShapesRef.current = [...useCanvasStore.getState().shapes];
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       handleEraserErase(worldPos);
       return;
     }
 
-    // 6. Лассо: выделение и возможность сразу перетаскивать выделенные элементы
+    // 6. Лассо: выделение области и перетаскивание уже выделенной группы
     if (activeTool === 'lasso') {
-      const hit = findItemAtPoint(worldPos);
-
-      // Проверяем, нажат ли уже ранее выделенный объект
-      const isHitAlreadySelected = hit && (
-        ('points' in hit && selectedStrokeIds.includes(hit.id)) ||
-        ('type' in hit && selectedShapeIds.includes(hit.id))
-      );
-
       const bounds = computeSelectionBounds();
       const pad = 12 / camera.zoom;
-      const isInsideSelection = bounds &&
+      const hasAnySelection = selectedStrokeIds.length > 0 || selectedShapeIds.length > 0 || selectedTextBlockIds.length > 0;
+      const isInsideSelection = bounds && hasAnySelection &&
         worldPos.x >= bounds.minX - pad &&
         worldPos.x <= bounds.maxX + pad &&
         worldPos.y >= bounds.minY - pad &&
         worldPos.y <= bounds.maxY + pad;
 
-      const hasSelection =
-        selectedStrokeIds.length > 0 ||
-        selectedShapeIds.length > 0 ||
-        selectedTextBlockIds.length > 0;
-
-      // Если есть выделение и пользователь кликнул по выделенному элементу или внутри рамки выделения —
-      // СРАЗУ начинаем перетаскивать (без необходимости отдельно переключаться на инструмент "курсор"!)
-      if (hasSelection && (isHitAlreadySelected || isInsideSelection)) {
+      if (isInsideSelection) {
+        // Перетаскиваем уже выделенную группу элементов прямо в режиме лассо
         moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
         dragInitialSnapshotRef.current = {
           strokes: [...useCanvasStore.getState().strokes],
@@ -959,27 +954,7 @@ export const InfiniteCanvas: React.FC = () => {
         return;
       }
 
-      // Если кликнули напрямую по невыделенному элементу — сразу выделяем и перетаскиваем
-      if (hit) {
-        if ('points' in hit) {
-          setSelection([hit.id], [], []);
-        } else if ('type' in hit) {
-          setSelection([], [hit.id], []);
-        }
-        moveDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
-        dragInitialSnapshotRef.current = {
-          strokes: [...useCanvasStore.getState().strokes],
-          shapes: [...useCanvasStore.getState().shapes],
-          textBlocks: [...useCanvasStore.getState().textBlocks],
-        };
-        if (containerRef.current) {
-          containerRef.current.style.cursor = 'grabbing';
-        }
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-        return;
-      }
-
-      // Клик по пустому месту — сбрасываем выделение и начинаем рисовать контур лассо
+      // Клик вне рамки выделения — сбрасываем старое выделение и начинаем чистое выделение области
       clearSelection();
       isPointerDownRef.current = true;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -998,6 +973,19 @@ export const InfiniteCanvas: React.FC = () => {
     };
 
     const candidates = spatialIndex.query(searchRange);
+
+    // Стирание фигур (удаляются целиком при касании ластиком как в OneNote)
+    const shapesToDelete: string[] = [];
+    for (const item of candidates) {
+      if ('type' in item) {
+        if (isShapeHitByEraser(item as ShapeObject, worldPos, eraserRadius)) {
+          shapesToDelete.push(item.id);
+        }
+      }
+    }
+    if (shapesToDelete.length > 0) {
+      deleteShapesSilent(shapesToDelete);
+    }
 
     const isPointMode = isRightClickEraserRef.current
       ? (rightClickAction === 'point-eraser')
@@ -1226,22 +1214,33 @@ export const InfiniteCanvas: React.FC = () => {
   };
 
   const finalizeEraserGesture = useCallback((isRmb: boolean) => {
-    if (!eraserInitialStrokesRef.current) return;
-    const prev = eraserInitialStrokesRef.current;
-    const curr = useCanvasStore.getState().strokes;
+    const prevStrokes = eraserInitialStrokesRef.current;
+    const prevShapes = eraserInitialShapesRef.current;
+    const currStrokes = useCanvasStore.getState().strokes;
+    const currShapes = useCanvasStore.getState().shapes;
+
     eraserInitialStrokesRef.current = null;
+    eraserInitialShapesRef.current = null;
 
-    const isDifferent =
-      prev.length !== curr.length ||
-      prev.some((s, idx) => s.id !== curr[idx]?.id || s.points.length !== curr[idx]?.points.length);
+    const isStrokesDiff =
+      !!prevStrokes &&
+      (prevStrokes.length !== currStrokes.length ||
+        prevStrokes.some((s, idx) => s.id !== currStrokes[idx]?.id || s.points.length !== currStrokes[idx]?.points.length));
 
-    if (isDifferent) {
+    const isShapesDiff =
+      !!prevShapes &&
+      (prevShapes.length !== currShapes.length ||
+        prevShapes.some((sh, idx) => sh.id !== currShapes[idx]?.id));
+
+    if (isStrokesDiff || isShapesDiff) {
       globalCommandStack.execute({
         execute: () => {
-          useCanvasStore.getState().restoreStrokesWithDirty(curr);
+          if (isStrokesDiff) useCanvasStore.getState().restoreStrokesWithDirty(currStrokes);
+          if (isShapesDiff) useCanvasStore.getState().restoreShapesWithDirty(currShapes);
         },
         undo: () => {
-          useCanvasStore.getState().restoreStrokesWithDirty(prev);
+          if (prevStrokes && isStrokesDiff) useCanvasStore.getState().restoreStrokesWithDirty(prevStrokes);
+          if (prevShapes && isShapesDiff) useCanvasStore.getState().restoreShapesWithDirty(prevShapes);
         },
         description: isRmb ? 'Стирание ПКМ-ластиком' : 'Стирание ластиком',
       });
@@ -1408,7 +1407,14 @@ export const InfiniteCanvas: React.FC = () => {
     // Завершение лассо: вычисляем выделенные элементы
     if (activeTool === 'lasso') {
       const lassoPts = lassoPointsRef.current;
-      if (lassoPts.length >= 3) {
+      let pathLength = 0;
+      for (let i = 1; i < lassoPts.length; i++) {
+        pathLength += Math.hypot(lassoPts[i].x - lassoPts[i - 1].x, lassoPts[i].y - lassoPts[i - 1].y);
+      }
+
+      // Если лассо слишком короткое (< 30px) или меньше 4 точек (обычный клик или дрожание мыши),
+      // не захватываем ничего! Это был просто клик на холсте для сброса выделения.
+      if (lassoPts.length >= 4 && pathLength >= 30) {
         const lassoBounds = Viewport.computeBounds(lassoPts);
         const candidates = spatialIndex.query(lassoBounds);
         const selectedStrokes: string[] = [];
@@ -1417,26 +1423,32 @@ export const InfiniteCanvas: React.FC = () => {
 
         for (const item of candidates) {
           if ('points' in item) {
-            const centerX = (item.bounds.minX + item.bounds.maxX) / 2;
-            const centerY = (item.bounds.minY + item.bounds.maxY) / 2;
-            if (isPointInPolygon({ x: centerX, y: centerY }, lassoPts)) {
-              selectedStrokes.push(item.id);
+            const pts = item.points;
+            if (pts.length > 0) {
+              let insideCount = 0;
+              for (const p of pts) {
+                if (isPointInPolygon(p, lassoPts)) insideCount++;
+              }
+              if (insideCount / pts.length >= 0.4) {
+                selectedStrokes.push(item.id);
+              }
             }
           } else if ('type' in item) {
-            const centerX = (item.bounds.minX + item.bounds.maxX) / 2;
-            const centerY = (item.bounds.minY + item.bounds.maxY) / 2;
-            if (isPointInPolygon({ x: centerX, y: centerY }, lassoPts)) {
+            const mid = { x: (item.anchor.x + item.end.x) / 2, y: (item.anchor.y + item.end.y) / 2 };
+            const anchorIn = isPointInPolygon(item.anchor, lassoPts);
+            const endIn = isPointInPolygon(item.end, lassoPts);
+            const midIn = isPointInPolygon(mid, lassoPts);
+            if ((anchorIn ? 1 : 0) + (endIn ? 1 : 0) + (midIn ? 1 : 0) >= 2) {
               selectedShapes.push(item.id);
             }
           }
         }
 
-        // Также захватываем текстовые блоки внутри контура лассо
+        // Захватываем текстовые блоки внутри контура лассо
         for (const tb of textBlocks) {
           const h = textBlockHeights[tb.id] || tb.height || 60;
-          const centerX = tb.x + tb.width / 2;
-          const centerY = tb.y + h / 2;
-          if (isPointInPolygon({ x: centerX, y: centerY }, lassoPts)) {
+          const center = { x: tb.x + tb.width / 2, y: tb.y + h / 2 };
+          if (isPointInPolygon(center, lassoPts)) {
             selectedTextBlocks.push(tb.id);
           }
         }
