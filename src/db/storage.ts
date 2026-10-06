@@ -5,8 +5,9 @@
  * производительность (60 FPS) и надёжность при работе на холсте.
  */
 
-import { getDB } from './idb';
+import { getDB, ImageAssetRecord } from './idb';
 import { syncEngine } from '../services/sync/syncEngine';
+import { assetManager } from '../services/assets/assetManager';
 import { Notebook, Section, Page } from '../types/notebook';
 import { Stroke, ShapeObject, Camera, CanvasBackground } from '../types/canvas';
 import { TextBlock } from '../types/textblock';
@@ -94,6 +95,16 @@ export async function loadPageData(pageId: string): Promise<{
   const strokes = await db.getAllFromIndex('strokes', 'by-page', pageId);
   const shapes = await db.getAllFromIndex('shapes', 'by-page', pageId);
   const textBlocks = await db.getAllFromIndex('textBlocks', 'by-page', pageId);
+
+  // Предзагрузка медиа-ассетов страницы в память для мгновенного отображения без битых ссылок
+  try {
+    const assets = await db.getAllFromIndex('assets', 'by-page', pageId);
+    for (const asset of assets) {
+      assetManager.registerAsset(asset.id, asset.blob);
+    }
+  } catch {
+    // ignore
+  }
 
   return { strokes, shapes, textBlocks };
 }
@@ -604,4 +615,29 @@ export async function importFullBackup(backupJson: string): Promise<{ success: b
     stats: `Восстановлено: ${notebooks.length} блокнотов, ${sections.length} разделов, ${pages.length} страниц, ${strokes.length} штрихов.`,
   };
 }
+
+/**
+ * Локальное бинарное хранилище изображений (IndexedDB)
+ * Хранит сырые оригинальные Blob без компрессии и без base64
+ */
+export async function saveAssetRecord(asset: ImageAssetRecord): Promise<void> {
+  const db = await getDB();
+  await db.put('assets', asset);
+}
+
+export async function getAssetRecord(id: string): Promise<ImageAssetRecord | undefined> {
+  const db = await getDB();
+  return db.get('assets', id);
+}
+
+export async function getAssetsByPage(pageId: string): Promise<ImageAssetRecord[]> {
+  const db = await getDB();
+  return db.getAllFromIndex('assets', 'by-page', pageId);
+}
+
+export async function deleteAssetRecord(id: string): Promise<void> {
+  const db = await getDB();
+  await db.delete('assets', id);
+}
+
 

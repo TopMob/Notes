@@ -7,13 +7,14 @@ import { drawStrokeToCanvas } from '../../canvas/stroke/freehand';
 import { drawShapeToCanvas, snapShapeEndPoint, computeShapeBounds, isShapeHitByEraser } from '../../canvas/stroke/shapes';
 import { simplifyDouglasPeucker } from '../../canvas/stroke/simplify';
 import { erasePointsFromStroke } from '../../canvas/stroke/eraser';
-import { Point, Stroke, ShapeObject, ViewportSize } from '../../types/canvas';
+import { Point, Stroke, ShapeObject, ViewportSize, Camera } from '../../types/canvas';
 import { SpatialItem } from '../../canvas/engine/SpatialIndex';
 import { TextBlock } from '../../types/textblock';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
 import { useUiStore } from '../../store/useUiStore';
 import { useShortcutsStore, MouseChordType } from '../../store/useShortcutsStore';
 import { GestureManager } from '../../canvas/input/GestureManager';
+import { assetManager } from '../../services/assets/assetManager';
 
 export const InfiniteCanvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -83,6 +84,7 @@ export const InfiniteCanvas: React.FC = () => {
   const eraserInitialStrokesRef = useRef<Stroke[] | null>(null);
   const eraserInitialShapesRef = useRef<ShapeObject[] | null>(null);
   const cursorWorldPosRef = useRef<{ x: number; y: number } | null>(null);
+  const cursorScreenPosRef = useRef<{ x: number; y: number } | null>(null);
   const isMouseChordActiveRef = useRef(false);
   const lastMouseChordTimeRef = useRef(0);
   const handleSinglePointerUpRef = useRef<((e: React.PointerEvent | PointerEvent) => void) | null>(null);
@@ -142,7 +144,58 @@ export const InfiniteCanvas: React.FC = () => {
     return () => clearTimeout(timer);
   }, [isSidebarOpen, isZenMode]);
 
-  // Горячие клавиши (Space для Pan, Ctrl+Z для Undo, Del для удаления)
+  // Обработчик вставки изображения на холст в заданной точке
+  const handleInsertImageAtPosition = useCallback(
+    async (file: File, screenPoint?: { x: number; y: number }) => {
+      if (!currentPageId) return;
+
+      // 1. Мгновенный 0ms Object URL и локальное сохранение в IndexedDB
+      const { id: assetId, url, width: imgW } = await assetManager.saveAsset(
+        file,
+        currentPageId,
+        file.name
+      );
+
+      // 2. Рассчитываем координаты вставки
+      let worldPos: { x: number; y: number };
+      const currentCamera = useCanvasStore.getState().camera;
+      const targetScreen = screenPoint || cursorScreenPosRef.current;
+      if (targetScreen) {
+        worldPos = Viewport.screenToWorld(targetScreen, currentCamera, viewportSize);
+      } else {
+        worldPos = { x: currentCamera.x - 220, y: currentCamera.y - 150 };
+      }
+
+      const initialWidth = Math.min(Math.max(imgW || 440, 240), 680);
+      const newId = `tb-${Date.now()}`;
+      const newBlock: TextBlock = {
+        id: newId,
+        pageId: currentPageId,
+        x: Math.round(worldPos.x),
+        y: Math.round(worldPos.y),
+        width: initialWidth,
+        contentHTML: `<div class="image-wrapper"><img src="${url}" data-asset-id="${assetId}" alt="${file.name || 'Изображение'}" style="max-width: 100%; border-radius: 6px; display: block; margin: 6px 0;" /></div><p><br></p>`,
+        zIndex: 10 + useCanvasStore.getState().textBlocks.length,
+      };
+
+      globalCommandStack.execute({
+        execute: () => {
+          useCanvasStore.getState().addTextBlock(newBlock);
+          useCanvasStore.getState().setSelection([], [], [newId]);
+        },
+        undo: () => {
+          useCanvasStore.getState().removeTextBlock(newId, true);
+        },
+        description: 'Вставка изображения',
+      });
+    },
+    [currentPageId, viewportSize]
+  );
+
+  const handleInsertImageAtPositionRef = useRef(handleInsertImageAtPosition);
+  handleInsertImageAtPositionRef.current = handleInsertImageAtPosition;
+
+  // Горячие клавиши (Space для Pan, Ctrl+Z для Undo, Del для удаления, Ctrl+V для вставки)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || (e.target as HTMLElement).isContentEditable) {
@@ -254,11 +307,53 @@ export const InfiniteCanvas: React.FC = () => {
       }
     };
 
+    const handleGlobalPaste = async (e: ClipboardEvent) => {
+      // Если фокус в input, textarea или contenteditable, не перехватываем
+      const target = e.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable ||
+        target?.closest('.text-block-content')
+      ) {
+        return;
+      }
+
+      const items = e.clipboardData?.items;
+      const files = e.clipboardData?.files;
+      let imageFile: File | null = null;
+
+      if (items) {
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.startsWith('image/')) {
+            imageFile = items[i].getAsFile();
+            break;
+          }
+        }
+      }
+      if (!imageFile && files && files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          if (files[i].type.startsWith('image/')) {
+            imageFile = files[i];
+            break;
+          }
+        }
+      }
+
+      if (imageFile) {
+        e.preventDefault();
+        e.stopPropagation();
+        await handleInsertImageAtPositionRef.current?.(imageFile);
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('paste', handleGlobalPaste);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('paste', handleGlobalPaste);
     };
   }, []);
 
@@ -483,17 +578,22 @@ export const InfiniteCanvas: React.FC = () => {
       }
     }
 
+    // Динамический расчет актуальной позиции курсора для предотвращения залипания при скролле
+    const activeCursorWorldPos = cursorScreenPosRef.current
+      ? Viewport.screenToWorld(cursorScreenPosRef.current, camera, viewportSize)
+      : cursorWorldPosRef.current;
+
     // 3. Кружок ластика под курсором (включая ПКМ ластик)
     if (
       (activeTool === 'point-eraser' || activeTool === 'stroke-eraser' || isRightClickEraserRef.current) &&
-      cursorWorldPosRef.current
+      activeCursorWorldPos
     ) {
       const radius = (eraserSize || 16) / camera.zoom;
       ctx.save();
       ctx.strokeStyle = '#ef4444';
       ctx.lineWidth = 1.5 / camera.zoom;
       ctx.beginPath();
-      ctx.arc(cursorWorldPosRef.current.x, cursorWorldPosRef.current.y, radius, 0, Math.PI * 2);
+      ctx.arc(activeCursorWorldPos.x, activeCursorWorldPos.y, radius, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
@@ -502,7 +602,7 @@ export const InfiniteCanvas: React.FC = () => {
     if (
       (activeTool === 'pen' || activeTool === 'highlighter') &&
       penCursorStyle === 'circle' &&
-      cursorWorldPosRef.current
+      activeCursorWorldPos
     ) {
       const radius = (activeTool === 'pen' ? penWidth : highlighterWidth) / 2;
       ctx.save();
@@ -510,11 +610,11 @@ export const InfiniteCanvas: React.FC = () => {
       ctx.fillStyle = activeTool === 'pen' ? penColor : 'rgba(234, 179, 8, 0.85)';
       ctx.lineWidth = 1.2 / camera.zoom;
       ctx.beginPath();
-      ctx.arc(cursorWorldPosRef.current.x, cursorWorldPosRef.current.y, Math.max(3, radius), 0, Math.PI * 2);
+      ctx.arc(activeCursorWorldPos.x, activeCursorWorldPos.y, Math.max(3, radius), 0, Math.PI * 2);
       ctx.stroke();
 
       ctx.beginPath();
-      ctx.arc(cursorWorldPosRef.current.x, cursorWorldPosRef.current.y, 1.2 / camera.zoom, 0, Math.PI * 2);
+      ctx.arc(activeCursorWorldPos.x, activeCursorWorldPos.y, 1.2 / camera.zoom, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
@@ -661,25 +761,42 @@ export const InfiniteCanvas: React.FC = () => {
     const onWheelNative = (e: WheelEvent) => {
       e.preventDefault();
 
+      const rect = container.getBoundingClientRect();
+      const screenPoint = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      };
+      cursorScreenPosRef.current = screenPoint;
+
       if (e.ctrlKey || e.metaKey) {
         // Zoom относительно позиции курсора мыши
-        const rect = container.getBoundingClientRect();
-        const screenPoint = {
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top,
-        };
         const factor = e.deltaY < 0 ? 1.08 : 0.92;
-        useCanvasStore.getState().setCamera((prev) =>
-          Viewport.zoomAtPoint(prev, screenPoint, factor, { w: rect.width, h: rect.height })
+        let nextCam: Camera;
+        useCanvasStore.getState().setCamera((prev) => {
+          nextCam = Viewport.zoomAtPoint(prev, screenPoint, factor, { w: rect.width, h: rect.height });
+          return nextCam;
+        });
+        cursorWorldPosRef.current = Viewport.screenToWorld(
+          screenPoint,
+          useCanvasStore.getState().camera,
+          { w: rect.width, h: rect.height }
         );
+        renderSelectionAndCursorLayer();
       } else {
         // Pan холста
         const curCam = useCanvasStore.getState().camera;
-        useCanvasStore.getState().setCamera((prev) => ({
-          ...prev,
-          x: prev.x + e.deltaX / curCam.zoom,
-          y: prev.y + e.deltaY / curCam.zoom,
-        }));
+        if (panStartRef.current) {
+          panStartRef.current.camX += e.deltaX / curCam.zoom;
+          panStartRef.current.camY += e.deltaY / curCam.zoom;
+        }
+        const nextCam = {
+          ...curCam,
+          x: curCam.x + e.deltaX / curCam.zoom,
+          y: curCam.y + e.deltaY / curCam.zoom,
+        };
+        useCanvasStore.getState().setCamera(nextCam);
+        cursorWorldPosRef.current = Viewport.screenToWorld(screenPoint, nextCam, { w: rect.width, h: rect.height });
+        renderSelectionAndCursorLayer();
       }
     };
 
@@ -1103,6 +1220,7 @@ export const InfiniteCanvas: React.FC = () => {
     }
 
     const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    cursorScreenPosRef.current = screenPos;
     const worldPos = Viewport.screenToWorld(screenPos, camera, viewportSize);
 
     // Динамический курсор 'move' при наведении на выделенные элементы (в режиме лассо или курсора)
@@ -1636,6 +1754,7 @@ export const InfiniteCanvas: React.FC = () => {
 
   const handlePointerLeave = () => {
     isMouseChordActiveRef.current = false;
+    cursorScreenPosRef.current = null;
     if (cursorWorldPosRef.current) {
       cursorWorldPosRef.current = null;
       renderSelectionAndCursorLayer();
@@ -1681,6 +1800,31 @@ export const InfiniteCanvas: React.FC = () => {
         e.preventDefault();
       }}
       onMouseDown={handleMouseDown}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('Files')) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+        }
+      }}
+      onDrop={async (e) => {
+        const files = Array.from(e.dataTransfer.files).filter((f) =>
+          f.type.startsWith('image/')
+        );
+        if (files.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          const rect = containerRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const screenPoint = {
+              x: e.clientX - rect.left + i * 20,
+              y: e.clientY - rect.top + i * 20,
+            };
+            await handleInsertImageAtPositionRef.current?.(file, screenPoint);
+          }
+        }
+      }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

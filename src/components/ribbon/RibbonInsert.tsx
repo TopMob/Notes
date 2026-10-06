@@ -9,11 +9,13 @@ import {
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { RibbonDropdown } from './RibbonDropdown';
 import { SymbolPickerDropdown } from './SymbolPickerDropdown';
+import { assetManager } from '../../services/assets/assetManager';
 
 export const RibbonInsert: React.FC = () => {
   const {
     addTextBlock,
     updateTextBlockWithHistory,
+    setSelection,
     camera,
     currentPageId,
     textBlocks,
@@ -72,12 +74,13 @@ export const RibbonInsert: React.FC = () => {
       addTextBlock({
         id: newId,
         pageId: currentPageId,
-        x: Math.round(-camera.x + 80),
-        y: Math.round(-camera.y + 120),
+        x: Math.round(camera.x - defaultWidth / 2),
+        y: Math.round(camera.y - 120),
         width: defaultWidth,
         contentHTML: htmlSnippet,
         zIndex: 10 + textBlocks.length,
       });
+      setSelection([], [], [newId]);
     }
   };
 
@@ -170,22 +173,23 @@ export const RibbonInsert: React.FC = () => {
     insertContent(html, 380);
   };
 
-  // Вставка изображения
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Вставка изображения через диалог выбора файла
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !currentPageId) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      if (dataUrl) {
-        insertContent(
-          `<div class="image-wrapper"><img src="${dataUrl}" alt="${file.name}" style="max-width: 100%; border-radius: 6px;" /></div><p></p>`,
-          540
-        );
-      }
-    };
-    reader.readAsDataURL(file);
+    // Мгновенный 0ms Object URL и локальное сохранение в IndexedDB
+    const { id: assetId, url, width: imgW } = await assetManager.saveAsset(
+      file,
+      currentPageId,
+      file.name
+    );
+
+    const targetWidth = Math.min(Math.max(imgW || 480, 260), 680);
+    insertContent(
+      `<div class="image-wrapper"><img src="${url}" data-asset-id="${assetId}" alt="${file.name}" style="max-width: 100%; border-radius: 6px; display: block; margin: 6px 0;" /></div><p><br></p>`,
+      targetWidth
+    );
     e.target.value = '';
   };
 

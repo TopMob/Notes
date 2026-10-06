@@ -3,7 +3,18 @@ import { Notebook, Section, Page } from '../types/notebook';
 import { Stroke, ShapeObject } from '../types/canvas';
 import { TextBlock } from '../types/textblock';
 
-interface OneNoteDB extends DBSchema {
+export interface ImageAssetRecord {
+  id: string;
+  pageId?: string;
+  blob: Blob;
+  mimeType: string;
+  name?: string;
+  width?: number;
+  height?: number;
+  createdAt: number;
+}
+
+export interface OneNoteDB extends DBSchema {
   notebooks: {
     key: string;
     value: Notebook;
@@ -34,10 +45,15 @@ interface OneNoteDB extends DBSchema {
     value: TextBlock;
     indexes: { 'by-page': string };
   };
+  assets: {
+    key: string;
+    value: ImageAssetRecord;
+    indexes: { 'by-page': string };
+  };
 }
 
 const DB_NAME = 'onenote_clone_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBPDatabase<OneNoteDB>> | null = null;
 
@@ -82,8 +98,15 @@ export function getDB(): Promise<IDBPDatabase<OneNoteDB>> {
           const tbStore = db.createObjectStore('textBlocks', { keyPath: 'id' });
           tbStore.createIndex('by-page', 'pageId');
         }
+
+        // Assets (бинарные оригинальные изображения)
+        if (!db.objectStoreNames.contains('assets')) {
+          const assetStore = db.createObjectStore('assets', { keyPath: 'id' });
+          assetStore.createIndex('by-page', 'pageId');
+        }
       },
     });
   }
   return dbPromise;
 }
+

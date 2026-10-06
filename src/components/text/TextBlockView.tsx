@@ -7,6 +7,7 @@ import { Viewport } from '../../canvas/engine/Viewport';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
 import { convertPowersToSuperscript, handlePowerKeyDown } from '../../utils/mathText';
+import { assetManager } from '../../services/assets/assetManager';
 
 interface TextBlockViewProps {
   block: TextBlock;
@@ -127,6 +128,25 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
           });
         } catch {
           // fallback
+        }
+      }
+    });
+  }, [block.contentHTML]);
+
+  // Автоматическая гидратация живых ObjectURL для изображений при загрузке или смене контента
+  useEffect(() => {
+    if (!contentRef.current) return;
+    const imgs = contentRef.current.querySelectorAll<HTMLImageElement>('img[data-asset-id]');
+    imgs.forEach(async (img) => {
+      const assetId = img.getAttribute('data-asset-id');
+      if (!assetId) return;
+      const cachedUrl = assetManager.getUrl(assetId);
+      if (cachedUrl && img.src !== cachedUrl) {
+        img.src = cachedUrl;
+      } else if (!cachedUrl) {
+        const loadedUrl = await assetManager.getOrLoadUrl(assetId);
+        if (loadedUrl && img.src !== loadedUrl) {
+          img.src = loadedUrl;
         }
       }
     });
@@ -503,7 +523,65 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
     }
   };
 
-  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+  const handlePaste = async (e: React.ClipboardEvent<HTMLDivElement>) => {
+    // 1. Проверяем наличие изображений в буфере обмена (Ctrl+V скриншота, Snipping Tool или скопированного файла)
+    const items = e.clipboardData.items;
+    const files = e.clipboardData.files;
+
+    let imageFile: File | null = null;
+    if (items) {
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) {
+          imageFile = items[i].getAsFile();
+          break;
+        }
+      }
+    }
+    if (!imageFile && files && files.length > 0) {
+      for (let i = 0; i < files.length; i++) {
+        if (files[i].type.startsWith('image/')) {
+          imageFile = files[i];
+          break;
+        }
+      }
+    }
+
+    if (imageFile) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Мгновенный 0ms Object URL и локальное сохранение в IndexedDB
+      const { id: assetId, url } = await assetManager.saveAsset(
+        imageFile,
+        block.pageId,
+        imageFile.name
+      );
+
+      const imgHtml = `<div class="image-wrapper"><img src="${url}" data-asset-id="${assetId}" alt="${imageFile.name || 'Изображение'}" style="max-width: 100%; border-radius: 6px; display: block; margin: 6px 0;" /></div><p><br></p>`;
+
+      try {
+        const success = document.execCommand('insertHTML', false, imgHtml);
+        if (!success && contentRef.current) {
+          contentRef.current.innerHTML += imgHtml;
+        }
+      } catch {
+        if (contentRef.current) {
+          contentRef.current.innerHTML += imgHtml;
+        }
+      }
+
+      if (contentRef.current) {
+        lastHtmlRef.current = contentRef.current.innerHTML;
+        const newWidth = Math.max(block.width, 380);
+        updateTextBlock(block.id, {
+          contentHTML: contentRef.current.innerHTML,
+          width: newWidth,
+        });
+      }
+      return;
+    }
+
+    // 2. Обработка текста и формул
     const plain = e.clipboardData.getData('text/plain');
     if (plain && plain.includes('^')) {
       e.preventDefault();
@@ -512,6 +590,43 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       if (contentRef.current) {
         lastHtmlRef.current = contentRef.current.innerHTML;
         updateTextBlock(block.id, { contentHTML: contentRef.current.innerHTML });
+      }
+    }
+  };
+
+  const handleDropContent = async (e: React.DragEvent<HTMLDivElement>) => {
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'));
+    if (files.length > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      for (const file of files) {
+        const { id: assetId, url } = await assetManager.saveAsset(
+          file,
+          block.pageId,
+          file.name
+        );
+        const imgHtml = `<div class="image-wrapper"><img src="${url}" data-asset-id="${assetId}" alt="${file.name || 'Изображение'}" style="max-width: 100%; border-radius: 6px; display: block; margin: 6px 0;" /></div><p><br></p>`;
+
+        try {
+          const success = document.execCommand('insertHTML', false, imgHtml);
+          if (!success && contentRef.current) {
+            contentRef.current.innerHTML += imgHtml;
+          }
+        } catch {
+          if (contentRef.current) {
+            contentRef.current.innerHTML += imgHtml;
+          }
+        }
+      }
+
+      if (contentRef.current) {
+        lastHtmlRef.current = contentRef.current.innerHTML;
+        const newWidth = Math.max(block.width, 380);
+        updateTextBlock(block.id, {
+          contentHTML: contentRef.current.innerHTML,
+          width: newWidth,
+        });
       }
     }
   };
@@ -581,6 +696,13 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('Files')) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+          }
+        }}
+        onDrop={handleDropContent}
         onContextMenu={(e) => e.stopPropagation()}
         style={{
           fontSize: '16px',

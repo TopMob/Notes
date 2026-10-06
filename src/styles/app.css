@@ -1175,6 +1175,29 @@
   font-style: normal;
 }
 
+.text-block-content .image-wrapper {
+  position: relative;
+  margin: 8px 0;
+  display: block;
+  user-select: none;
+  max-width: 100%;
+}
+
+.text-block-content .image-wrapper img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: box-shadow var(--transition-fast, 0.15s ease), transform var(--transition-fast, 0.15s ease);
+  pointer-events: auto;
+}
+
+.text-block-content .image-wrapper img:hover {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+}
+
+
 .text-block-content h1 {
   font-size: 1.6em;
   font-weight: 700;
