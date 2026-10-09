@@ -15,6 +15,7 @@ import { CreateSectionModal } from './components/modals/CreateSectionModal';
 import { ConfirmDeleteModal } from './components/modals/ConfirmDeleteModal';
 import { TrashModal } from './components/modals/TrashModal';
 import './styles/app.css';
+import { useCanvasStore } from './store/useCanvasStore';
 
 export const App: React.FC = () => {
   const { init, isLoading } = useNotebookStore();
@@ -23,6 +24,26 @@ export const App: React.FC = () => {
   useEffect(() => {
     init();
   }, [init]);
+
+  useEffect(() => {
+    const save = () => { void useCanvasStore.getState().flushAllSaves().catch(() => {}); };
+    const hidden = () => { if (document.visibilityState === 'hidden') save(); };
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (useCanvasStore.getState().saveStatus !== 'saved') {
+        save();
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    document.addEventListener('visibilitychange', hidden);
+    window.addEventListener('pagehide', save);
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => {
+      document.removeEventListener('visibilitychange', hidden);
+      window.removeEventListener('pagehide', save);
+      window.removeEventListener('beforeunload', beforeUnload);
+    };
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);

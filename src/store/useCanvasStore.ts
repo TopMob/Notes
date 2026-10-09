@@ -32,7 +32,22 @@ interface PageDirtyTracker {
 
 const pageDirtyMap = new Map<string, PageDirtyTracker>();
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const maxSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingSaves = new Map<string, Promise<void>>();
+
+function restoreDirty(pageId: string, failed: PageDirtyTracker) {
+  const newer = getOrCreateDirty(pageId);
+  for (const [oldPut, oldDelete, newPut, newDelete] of [
+    [failed.strokesPut, failed.strokesDelete, newer.strokesPut, newer.strokesDelete],
+    [failed.shapesPut, failed.shapesDelete, newer.shapesPut, newer.shapesDelete],
+    [failed.textBlocksPut, failed.textBlocksDelete, newer.textBlocksPut, newer.textBlocksDelete],
+  ] as [Map<string, Stroke | ShapeObject | TextBlock>, Set<string>, Map<string, Stroke | ShapeObject | TextBlock>, Set<string>][]) {
+    for (const [id, value] of oldPut) if (!newPut.has(id) && !newDelete.has(id)) newPut.set(id, value);
+    for (const id of oldDelete) if (!newPut.has(id) && !newDelete.has(id)) newDelete.add(id);
+  }
+  newer.metadata = failed.metadata || newer.metadata ? { ...failed.metadata, ...newer.metadata } : null;
+  newer.fullSync = failed.fullSync || newer.fullSync;
+}
 
 function getOrCreateDirty(pageId: string): PageDirtyTracker {
   let d = pageDirtyMap.get(pageId);
@@ -87,7 +102,8 @@ interface CanvasState {
   spatialIndex: SpatialIndex;
 
   // Статус сохранения
-  saveStatus: 'saved' | 'saving';
+  saveStatus: 'saved' | 'unsaved' | 'saving' | 'error';
+  saveError: string | null;
 
   // Действия
   setActiveTool: (tool: ToolType) => void;
@@ -152,10 +168,13 @@ interface CanvasState {
   deleteSelectedItems: () => void;
 
   flushSave: (targetPageId?: string) => Promise<void>;
+  flushAllSaves: () => Promise<void>;
   triggerAutosave: () => void;
 }
 
 export const useCanvasStore = create<CanvasState>((set, get) => {
+  let pageLoadSequence = 0;
+  let editSequence = 0;
   const spatialIndex = new SpatialIndex();
 
   /**
@@ -172,16 +191,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       clearTimeout(timer);
       saveTimers.delete(pageId);
     }
+    const maxTimer = maxSaveTimers.get(pageId);
+    if (maxTimer) { clearTimeout(maxTimer); maxSaveTimers.delete(pageId); }
 
     // Если прямо сейчас идет сохранение этой страницы — дожидаемся
-    const inFlight = pendingSaves.get(pageId);
-    if (inFlight) {
-      try {
-        await inFlight;
-      } catch {
-        // ignore
-      }
-    }
+    while (pendingSaves.has(pageId)) await pendingSaves.get(pageId);
 
     const dirty = pageDirtyMap.get(pageId);
     if (!dirty) {
@@ -192,9 +206,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     pageDirtyMap.delete(pageId);
 
     const performSave = async () => {
-      set({ saveStatus: 'saving' });
+      set({ saveStatus: 'saving', saveError: null });
       try {
         if (dirty.fullSync) {
+          if (get().currentPageId !== pageId) throw new Error('Не удалось сохранить снимок другой страницы');
           const { strokes, shapes, textBlocks, camera, background } = get();
           await savePageFull(pageId, { strokes, shapes, textBlocks, camera, background });
         } else {
@@ -227,10 +242,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           }
         }
       } catch (err) {
+        restoreDirty(pageId, dirty);
+        set({ saveStatus: 'error', saveError: 'Не удалось сохранить заметку на устройстве. Правки остаются в памяти — повторите сохранение.' });
         console.error(`Ошибка сохранения страницы ${pageId} в IndexedDB:`, err);
+        throw err;
       } finally {
-        set({ saveStatus: 'saved' });
         pendingSaves.delete(pageId);
+        if (get().saveStatus !== 'error') set({ saveStatus: pendingSaves.size ? 'saving' : pageDirtyMap.size ? 'unsaved' : 'saved' });
       }
     };
 
@@ -244,10 +262,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
    * Захватывает конкретный pageId, защищая от гонок при переключении страниц.
    */
   const scheduleSave = (targetPageId?: string) => {
+    editSequence++;
     const pageId = targetPageId || get().currentPageId;
     if (!pageId) return;
 
-    set({ saveStatus: 'saving' });
+    if (get().saveStatus !== 'error') set({ saveStatus: 'unsaved' });
 
     const existingTimer = saveTimers.get(pageId);
     if (existingTimer) {
@@ -256,10 +275,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     const newTimer = setTimeout(() => {
       saveTimers.delete(pageId);
-      flushSave(pageId);
+      void flushSave(pageId).catch(() => {});
     }, 400);
 
     saveTimers.set(pageId, newTimer);
+    if (!maxSaveTimers.has(pageId)) maxSaveTimers.set(pageId, setTimeout(() => {
+      maxSaveTimers.delete(pageId);
+      void flushSave(pageId).catch(() => {});
+    }, 2000));
   };
 
   return {
@@ -351,6 +374,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     spatialIndex,
     saveStatus: 'saved',
+    saveError: null,
 
     setActiveTool: (tool) => {
       set({ activeTool: tool });
@@ -392,16 +416,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     loadPage: async (pageId: string, initialCamera?: Camera, initialBg?: CanvasBackground) => {
+      const sequence = ++pageLoadSequence;
       const prevPageId = get().currentPageId;
-      if (prevPageId && prevPageId !== pageId) {
+      if (prevPageId) {
         // Принудительно сохраняем предыдущую страницу до переключения
         await flushSave(prevPageId);
       }
 
-      globalCommandStack.clear();
-
+      const editsBeforeLoad = editSequence;
       const { strokes, shapes, textBlocks } = await loadPageData(pageId);
+      if (sequence !== pageLoadSequence || get().currentPageId !== prevPageId) {
+        throw new Error('Загрузка страницы заменена новым переходом');
+      }
+      if (editSequence !== editsBeforeLoad || prevPageId && (pageDirtyMap.has(prevPageId) || pendingSaves.has(prevPageId))) {
+        throw new Error('Во время загрузки появились новые правки. Повторите переход после сохранения.');
+      }
 
+      globalCommandStack.clear();
       spatialIndex.rebuild([...strokes, ...shapes]);
 
       set({
@@ -414,7 +445,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         selectedTextBlockIds: [],
         camera: initialCamera ?? { x: 260, y: 150, zoom: 1 },
         background: initialBg ?? 'grid-small',
-        saveStatus: 'saved',
+        saveStatus: pageDirtyMap.size ? 'unsaved' : pendingSaves.size ? 'saving' : 'saved',
+        saveError: null,
         canUndo: false,
         canRedo: false,
       });
@@ -1121,7 +1153,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     flushSave,
-    triggerAutosave: () => flushSave(),
+    flushAllSaves: async () => {
+      const ids = new Set([...pageDirtyMap.keys(), ...pendingSaves.keys()]);
+      for (const id of ids) await flushSave(id);
+    },
+    triggerAutosave: () => { void flushSave().catch(() => {}); },
   };
 });
 

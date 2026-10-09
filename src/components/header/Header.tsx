@@ -8,6 +8,7 @@ import {
 import { useUiStore } from '../../store/useUiStore';
 import { SyncStatusBadge } from '../auth/SyncStatusBadge';
 import { AuthControls } from '../auth/AuthControls';
+import { LocalSaveStatus } from '../common/LocalSaveStatus';
 
 export const Header: React.FC = () => {
   const {
@@ -33,6 +34,7 @@ export const Header: React.FC = () => {
 
       {/* Правая группа: Статус синхронизации, Корзина, Zen-режим, Настройки, Авторизация */}
       <div className="header-right">
+        <LocalSaveStatus />
         {/* Индикатор синхронизации с облаком / локально */}
         <SyncStatusBadge />
 

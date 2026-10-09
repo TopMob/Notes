@@ -198,6 +198,7 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
   },
 
   selectNotebook: async (notebook) => {
+    try { await useCanvasStore.getState().flushAllSaves(); } catch { return; }
     set({ activeNotebook: notebook });
     const sections = await loadSections(notebook.id);
     const activeSection = sections[0] || null;
@@ -324,6 +325,7 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
   },
 
   selectSection: async (section) => {
+    try { await useCanvasStore.getState().flushAllSaves(); } catch { return; }
     set({ activeSection: section });
     const pages = await loadPages(section.id);
     const activePage = pages[0] || null;
@@ -342,8 +344,8 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
   },
 
   selectPage: async (page, updateUrl = true) => {
+    try { await useCanvasStore.getState().loadPage(page.id, page.camera, page.background); } catch { return; }
     set({ activePage: page });
-    await useCanvasStore.getState().loadPage(page.id, page.camera, page.background);
     if (updateUrl && typeof window !== 'undefined') {
       const canonicalPath = formatPageUrl(page.slug || titleToSlug(page.title));
       if (window.location.pathname !== canonicalPath) {
@@ -353,6 +355,7 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
   },
 
   navigateToPage: async (pageId: string, updateUrl = true) => {
+    try { await useCanvasStore.getState().flushAllSaves(); } catch { return; }
     const db = await getDB();
     const page = await db.get('pages', pageId);
     if (!page) return;

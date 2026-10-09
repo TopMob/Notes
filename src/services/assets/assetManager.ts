@@ -62,7 +62,9 @@ class AssetManager {
         createdAt: Date.now(),
       });
     } catch (err) {
-      console.warn('[AssetManager] Failed to persist asset to IndexedDB:', err);
+      this.revoke(id);
+      console.error('[AssetManager] Failed to persist image:', err);
+      throw new Error('Не удалось сохранить изображение на устройстве. Освободите место и повторите вставку.');
     }
 
     return { id, url, width, height };

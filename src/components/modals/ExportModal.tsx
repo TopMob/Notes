@@ -213,6 +213,7 @@ export const ExportModal: React.FC = () => {
   // Экспорт всей базы в JSON-бэкап
   const handleExportJson = async () => {
     try {
+      await useCanvasStore.getState().flushAllSaves();
       const { exportFullBackup } = await import('../../db/storage');
       const jsonString = await exportFullBackup();
       const blob = new Blob([jsonString], { type: 'application/json' });
@@ -288,8 +289,8 @@ export const ExportModal: React.FC = () => {
                 <FileJson size={24} />
               </div>
               <div className="export-card-info">
-                <h4>Резервная копия (JSON)</h4>
-                <p>Полный бэкап всех блокнотов, разделов, штрихов и заметок</p>
+                <h4>Копия заметок (JSON)</h4>
+                <p>Блокноты, текст и рисунки. Файлы изображений в этот формат не входят.</p>
               </div>
               <Download size={18} className="card-action-icon" />
             </button>
@@ -305,7 +306,7 @@ export const ExportModal: React.FC = () => {
               </div>
               <input
                 type="file"
-                accept=".json,.gz,.json.gz,application/json,application/gzip"
+                accept=".json,application/json"
                 onChange={handleImportJson}
                 className="hidden-file-input"
               />

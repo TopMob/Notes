@@ -551,11 +551,13 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       e.stopPropagation();
 
       // Мгновенный 0ms Object URL и локальное сохранение в IndexedDB
-      const { id: assetId, url } = await assetManager.saveAsset(
+      const savedAsset = await assetManager.saveAsset(
         imageFile,
         block.pageId,
         imageFile.name
-      );
+      ).catch(error => { alert(error.message); return null; });
+      if (!savedAsset) return;
+      const { id: assetId, url } = savedAsset;
 
       const imgHtml = `<div class="image-wrapper"><img src="${url}" data-asset-id="${assetId}" alt="${imageFile.name || 'Изображение'}" style="max-width: 100%; border-radius: 6px; display: block; margin: 6px 0;" /></div><p><br></p>`;
 
@@ -601,11 +603,13 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       e.stopPropagation();
 
       for (const file of files) {
-        const { id: assetId, url } = await assetManager.saveAsset(
+        const savedAsset = await assetManager.saveAsset(
           file,
           block.pageId,
           file.name
-        );
+        ).catch(error => { alert(error.message); return null; });
+        if (!savedAsset) return;
+        const { id: assetId, url } = savedAsset;
         const imgHtml = `<div class="image-wrapper"><img src="${url}" data-asset-id="${assetId}" alt="${file.name || 'Изображение'}" style="max-width: 100%; border-radius: 6px; display: block; margin: 6px 0;" /></div><p><br></p>`;
 
         try {

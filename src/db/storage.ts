@@ -8,6 +8,7 @@
 import { getDB, ImageAssetRecord } from './idb';
 import { syncEngine } from '../services/sync/syncEngine';
 import { assetManager } from '../services/assets/assetManager';
+import { validateLegacyBackup } from './backupValidation';
 import { Notebook, Section, Page } from '../types/notebook';
 import { Stroke, ShapeObject, Camera, CanvasBackground } from '../types/canvas';
 import { TextBlock } from '../types/textblock';
@@ -20,22 +21,16 @@ import {
 export async function initStorage(): Promise<void> {
   const db = await getDB();
   const existingNotebooks = await db.getAll('notebooks');
-  const hasOldTestData = existingNotebooks.some((nb) => nb.id === 'nb-college');
+  const otherStores = await Promise.all(['sections', 'pages', 'strokes', 'shapes', 'textBlocks', 'assets'].map(
+    name => db.count(name as 'sections' | 'pages' | 'strokes' | 'shapes' | 'textBlocks' | 'assets')
+  ));
 
-  if (existingNotebooks.length === 0 || hasOldTestData) {
+  // Seed only a genuinely empty database. Legacy IDs are user data, not a reset signal.
+  if (existingNotebooks.length === 0 && otherStores.every(count => count === 0)) {
     const tx = db.transaction(
       ['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'],
       'readwrite'
     );
-
-    if (hasOldTestData) {
-      await tx.objectStore('notebooks').clear();
-      await tx.objectStore('sections').clear();
-      await tx.objectStore('pages').clear();
-      await tx.objectStore('strokes').clear();
-      await tx.objectStore('shapes').clear();
-      await tx.objectStore('textBlocks').clear();
-    }
 
     await tx.objectStore('notebooks').put(INITIAL_NOTEBOOK);
 
@@ -48,17 +43,6 @@ export async function initStorage(): Promise<void> {
     }
 
     await tx.done;
-  } else {
-    // Автоматическое лечение: проверяем, нет ли страниц без sectionId
-    const allSections = await db.getAll('sections');
-    const fallbackSectionId = allSections[0]?.id || INITIAL_SECTIONS[0].id;
-    const allPages = await db.getAll('pages');
-    for (const pg of allPages) {
-      if (!pg.sectionId) {
-        pg.sectionId = fallbackSectionId;
-        await db.put('pages', pg);
-      }
-    }
   }
 }
 
@@ -549,12 +533,12 @@ export interface FullDatabaseBackup {
  */
 export async function exportFullBackup(): Promise<string> {
   const db = await getDB();
-  const notebooks = await db.getAll('notebooks');
-  const sections = await db.getAll('sections');
-  const pages = await db.getAll('pages');
-  const strokes = await db.getAll('strokes');
-  const shapes = await db.getAll('shapes');
-  const textBlocks = await db.getAll('textBlocks');
+  const tx = db.transaction(['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'], 'readonly');
+  const [notebooks, sections, pages, strokes, shapes, textBlocks] = await Promise.all([
+    tx.objectStore('notebooks').getAll(), tx.objectStore('sections').getAll(), tx.objectStore('pages').getAll(),
+    tx.objectStore('strokes').getAll(), tx.objectStore('shapes').getAll(), tx.objectStore('textBlocks').getAll(),
+  ]);
+  await tx.done;
 
   const backup: FullDatabaseBackup = {
     version: 1,
@@ -578,9 +562,7 @@ export async function exportFullBackup(): Promise<string> {
  */
 export async function importFullBackup(backupJson: string): Promise<{ success: boolean; stats: string }> {
   const parsed = JSON.parse(backupJson);
-  if (!parsed || !parsed.data) {
-    throw new Error('Некорректный формат файла резервной копии');
-  }
+  validateLegacyBackup(parsed);
 
   const {
     notebooks = [],

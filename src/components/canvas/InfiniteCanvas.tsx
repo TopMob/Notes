@@ -150,11 +150,13 @@ export const InfiniteCanvas: React.FC = () => {
       if (!currentPageId) return;
 
       // 1. Мгновенный 0ms Object URL и локальное сохранение в IndexedDB
-      const { id: assetId, url, width: imgW } = await assetManager.saveAsset(
+      const savedAsset = await assetManager.saveAsset(
         file,
         currentPageId,
         file.name
-      );
+      ).catch(error => { alert(error.message); return null; });
+      if (!savedAsset) return;
+      const { id: assetId, url, width: imgW } = savedAsset;
 
       // 2. Рассчитываем координаты вставки
       let worldPos: { x: number; y: number };
