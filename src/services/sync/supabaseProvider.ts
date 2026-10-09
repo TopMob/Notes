@@ -3,7 +3,9 @@ import { ISyncProvider, CloudPullResult } from './types';
 import { Notebook, Section, Page } from '../../types/notebook';
 import { Stroke, ShapeObject } from '../../types/canvas';
 import { TextBlock } from '../../types/textblock';
-import { compressBatch, decompressBatch, decompressJson } from './compression';
+import { compressBatch } from './compression';
+import { decodeCloudElements } from './cloudElements';
+import { readSupabaseRows } from './supabaseRead';
 
 function deduplicateById<T extends { id: string }>(items: T[]): T[] {
   const map = new Map<string, T>();
@@ -202,71 +204,16 @@ export class SupabaseProvider implements ISyncProvider {
     const client = this.getClient();
 
     const [nbRes, secRes, pageRes, elRes] = await Promise.all([
-      client.from('notebooks').select('*').eq('user_id', userId).gt('updated_at', since),
-      client.from('sections').select('*').eq('user_id', userId).gt('updated_at', since),
-      client.from('pages').select('*').eq('user_id', userId).gt('updated_at', since),
-      client.from('page_elements').select('*').eq('user_id', userId).gt('updated_at', since),
+      readSupabaseRows(client, 'notebooks', userId, since),
+      readSupabaseRows(client, 'sections', userId, since),
+      readSupabaseRows(client, 'pages', userId, since),
+      readSupabaseRows(client, 'page_elements', userId, since),
     ]);
 
-    if (nbRes.error) throw nbRes.error;
-    if (secRes.error) throw secRes.error;
-    if (pageRes.error) throw pageRes.error;
-    if (elRes.error) throw elRes.error;
-
-    const parsedElements: CloudPullResult['elements'] = [];
-
-    for (const r of elRes.data || []) {
-      const updatedAt = Number(r.updated_at);
-      const deletedAt = r.deleted_at ? Number(r.deleted_at) : null;
-
-      if (r.type === 'bundle') {
-        // Распаковываем пакетный бандл страницы (schema_version = 2)
-        const bundle = await decompressBatch(r.data);
-        for (const stroke of bundle.strokes) {
-          parsedElements.push({
-            id: stroke.id,
-            pageId: r.page_id,
-            type: 'stroke',
-            data: stroke,
-            updatedAt,
-            deletedAt,
-          });
-        }
-        for (const shape of bundle.shapes) {
-          parsedElements.push({
-            id: shape.id,
-            pageId: r.page_id,
-            type: 'shape',
-            data: shape,
-            updatedAt,
-            deletedAt,
-          });
-        }
-        for (const tb of bundle.textBlocks) {
-          parsedElements.push({
-            id: tb.id,
-            pageId: r.page_id,
-            type: 'textBlock',
-            data: tb,
-            updatedAt,
-            deletedAt,
-          });
-        }
-      } else {
-        // Обратная совместимость для старых записей (schema_version = 1 или поэлементные)
-        parsedElements.push({
-          id: r.id,
-          pageId: r.page_id,
-          type: r.type,
-          data: await decompressJson(r.data),
-          updatedAt,
-          deletedAt,
-        });
-      }
-    }
+    const parsedElements = await decodeCloudElements(elRes);
 
     return {
-      notebooks: (nbRes.data || []).map((r: any) => ({
+      notebooks: nbRes.map((r: any) => ({
         id: r.id,
         title: r.title,
         createdAt: Number(r.created_at),
@@ -274,7 +221,7 @@ export class SupabaseProvider implements ISyncProvider {
         order: Number(r.order),
         deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
       })),
-      sections: (secRes.data || []).map((r: any) => ({
+      sections: secRes.map((r: any) => ({
         id: r.id,
         notebookId: r.notebook_id,
         title: r.title,
@@ -283,7 +230,7 @@ export class SupabaseProvider implements ISyncProvider {
         updatedAt: Number(r.updated_at),
         deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
       })),
-      pages: (pageRes.data || []).map((r: any) => ({
+      pages: pageRes.map((r: any) => ({
         id: r.id,
         sectionId: r.section_id,
         title: r.title,
@@ -291,7 +238,7 @@ export class SupabaseProvider implements ISyncProvider {
         updatedAt: Number(r.updated_at),
         order: Number(r.order),
         camera: r.camera || { x: 0, y: 0, zoom: 1 },
-        background: r.background || { type: 'grid', color: '#ffffff' },
+        background: r.background || 'grid-small',
         deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
       })),
       elements: parsedElements,

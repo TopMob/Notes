@@ -28,7 +28,7 @@ export const CloudSettingsModal: React.FC = () => {
   const handleProviderChange = (type: SyncProviderType) => {
     setProviderType(type);
     if (isSignedIn && type !== 'local') {
-      syncEngine.syncAll();
+      void syncEngine.syncAll().catch(() => {});
     }
   };
 
@@ -46,6 +46,7 @@ export const CloudSettingsModal: React.FC = () => {
     setSyncSuccessMsg(null);
     try {
       const stats = await syncEngine.syncAll();
+      if (useSyncStore.getState().errorMessage) return;
       const pushedTotal = stats.pushed.notebooks + stats.pushed.sections + stats.pushed.pages;
       const pushedElem = stats.pushed.elements || 0;
       const pulledTotal = stats.pulled.notebooks + stats.pulled.sections + stats.pulled.pages;

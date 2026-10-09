@@ -4,7 +4,7 @@ import { useSyncStore } from '../../services/sync/syncEngine';
 import { useUiStore } from '../../store/useUiStore';
 
 export const SyncStatusBadge: React.FC = () => {
-  const { providerType, status, userId } = useSyncStore();
+  const { providerType, status, userId, errorMessage } = useSyncStore();
   const { setCloudSettingsOpen } = useUiStore();
 
   const isLocalOnly = !userId || providerType === 'local';
@@ -13,7 +13,7 @@ export const SyncStatusBadge: React.FC = () => {
     <button
       className={`sync-badge-btn ${status} ${isLocalOnly ? 'mode-local' : 'mode-cloud'}`}
       onClick={() => setCloudSettingsOpen(true)}
-      title="Настройки хранилища и синхронизации"
+      title={errorMessage || 'Настройки хранилища и синхронизации'}
     >
       {isLocalOnly ? (
         <>

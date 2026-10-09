@@ -42,6 +42,7 @@ interface NotebookState {
   activePage: Page | null;
 
   isLoading: boolean;
+  loadError: string | null;
 
   // Действия
   init: () => Promise<void>;
@@ -109,92 +110,110 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
   pages: [],
   activePage: null,
   isLoading: true,
+  loadError: null,
 
   init: async () => {
     // Предотвращаем повторную инициализацию
-    if (get().notebooks.length > 0 && !get().isLoading) return;
+    if (get().notebooks.length > 0 && !get().isLoading && !get().loadError) return;
 
     setupPopStateListener();
 
-    set({ isLoading: true });
-    await initStorage();
+    set({ isLoading: true, loadError: null });
+    try {
+      await initStorage();
 
-    const notebooks = await loadNotebooks();
-    const allPages = await loadAllPages();
+      const notebooks = await loadNotebooks();
+      const allPages = await loadAllPages();
 
-    // Мягкая миграция: гарантируем наличие уникального slug у всех существующих страниц
-    const existingSlugs: string[] = [];
-    const existingAliases: string[] = [];
-    for (const p of allPages) {
-      if (p.slug) existingSlugs.push(p.slug);
-      if (p.slugAliases) existingAliases.push(...p.slugAliases);
-    }
-
-    for (const p of allPages) {
-      if (!p.slug) {
-        p.slug = generateUniqueSlug(p.title, existingSlugs, undefined, existingAliases);
-        existingSlugs.push(p.slug);
-        if (!p.slugAliases) p.slugAliases = [];
-        await updatePageMetadata(p.id, { slug: p.slug, slugAliases: p.slugAliases });
+      // Мягкая миграция: гарантируем наличие уникального slug у всех существующих страниц
+      const existingSlugs: string[] = [];
+      const existingAliases: string[] = [];
+      for (const p of allPages) {
+        if (p.slug) existingSlugs.push(p.slug);
+        if (p.slugAliases) existingAliases.push(...p.slugAliases);
       }
-    }
 
-    // Проверяем URL: если передан слаг, ищем целевую страницу
-    const targetSlug = typeof window !== 'undefined' ? getSlugFromPathname(window.location.pathname) : null;
-    let targetPage = targetSlug ? findPageBySlugOrAlias(allPages, targetSlug) : null;
-
-    let activeNotebook: Notebook | null = null;
-    let sections: Section[] = [];
-    let activeSection: Section | null = null;
-    let pages: Page[] = [];
-    let activePage: Page | null = null;
-
-    if (targetPage) {
-      const db = await getDB();
-      const section = await db.get('sections', targetPage.sectionId);
-      if (section) {
-        const notebook = await db.get('notebooks', section.notebookId);
-        if (notebook) {
-          activeNotebook = notebook;
-          sections = await loadSections(notebook.id);
-          activeSection = section;
-          pages = await loadPages(section.id);
-          activePage = pages.find((p) => p.id === targetPage!.id) || targetPage;
+      for (const p of allPages) {
+        if (!p.slug) {
+          p.slug = generateUniqueSlug(p.title, existingSlugs, undefined, existingAliases);
+          existingSlugs.push(p.slug);
+          if (!p.slugAliases) p.slugAliases = [];
+          try {
+            await updatePageMetadata(p.id, { slug: p.slug, slugAliases: p.slugAliases });
+          } catch (error) {
+            // URL maintenance must never prevent reading already stored notes.
+            console.warn('Не удалось сохранить адрес страницы; заметка доступна для чтения:', error);
+          }
         }
       }
-    }
 
-    // Если страница не найдена по URL — открываем первую страницу по умолчанию
-    if (!activePage && notebooks.length > 0) {
-      activeNotebook = notebooks[0];
-      sections = await loadSections(activeNotebook.id);
-      activeSection = sections[0] || null;
+      // Проверяем URL: если передан слаг, ищем целевую страницу
+      const targetSlug = typeof window !== 'undefined' ? getSlugFromPathname(window.location.pathname) : null;
+      let targetPage = targetSlug ? findPageBySlugOrAlias(allPages, targetSlug) : null;
 
-      if (activeSection) {
-        pages = await loadPages(activeSection.id);
-        activePage = pages[0] || null;
-      }
-    }
+      let activeNotebook: Notebook | null = null;
+      let sections: Section[] = [];
+      let activeSection: Section | null = null;
+      let pages: Page[] = [];
+      let activePage: Page | null = null;
 
-    if (activePage) {
-      await useCanvasStore.getState().loadPage(activePage.id, activePage.camera, activePage.background);
-      if (typeof window !== 'undefined') {
-        const canonicalPath = formatPageUrl(activePage.slug || titleToSlug(activePage.title));
-        if (window.location.pathname !== canonicalPath) {
-          window.history.replaceState({ pageId: activePage.id }, '', canonicalPath);
+      if (targetPage) {
+        const db = await getDB();
+        const section = await db.get('sections', targetPage.sectionId);
+        if (section) {
+          const notebook = await db.get('notebooks', section.notebookId);
+          if (notebook) {
+            activeNotebook = notebook;
+            sections = await loadSections(notebook.id);
+            activeSection = section;
+            pages = await loadPages(section.id);
+            activePage = pages.find((p) => p.id === targetPage!.id) || targetPage;
+          }
         }
       }
-    }
 
-    set({
-      notebooks,
-      activeNotebook,
-      sections,
-      activeSection,
-      pages,
-      activePage,
-      isLoading: false,
-    });
+      // Если страница не найдена по URL — открываем первую страницу по умолчанию
+      if (!activePage && notebooks.length > 0) {
+        for (const notebook of notebooks) {
+          const candidateSections = await loadSections(notebook.id);
+          for (const section of candidateSections) {
+            const candidatePages = await loadPages(section.id);
+            if (candidatePages.length) {
+              activeNotebook = notebook; sections = candidateSections; activeSection = section;
+              pages = candidatePages; activePage = pages[0]; break;
+            }
+          }
+          if (activePage) break;
+        }
+        if (!activeNotebook) {
+          activeNotebook = notebooks[0]; sections = await loadSections(activeNotebook.id);
+          activeSection = sections[0] || null;
+        }
+      }
+
+      if (activePage) {
+        await useCanvasStore.getState().loadPage(activePage.id, activePage.camera, activePage.background);
+        if (typeof window !== 'undefined') {
+          const canonicalPath = formatPageUrl(activePage.slug || titleToSlug(activePage.title));
+          if (window.location.pathname !== canonicalPath) {
+            window.history.replaceState({ pageId: activePage.id }, '', canonicalPath);
+          }
+        }
+      }
+
+      set({
+        notebooks,
+        activeNotebook,
+        sections,
+        activeSection,
+        pages,
+        activePage,
+        isLoading: false,
+      });
+    } catch (error) {
+      console.error('Ошибка открытия локальных заметок:', error);
+      set({ isLoading: false, loadError: 'Не удалось открыть заметки на этом устройстве. Попробуйте загрузить их ещё раз. Сброс базы не выполнялся.' });
+    }
   },
 
   selectNotebook: async (notebook) => {

@@ -40,7 +40,7 @@ export const AuthControls: React.FC = () => {
 
       // При первом входе автоматически запускаем синхронизацию
       if (currentUserId && providerType !== 'local') {
-        syncEngine.syncAll();
+        void syncEngine.syncAll().catch(() => {});
       }
     }
   }, [isLoaded, isSignedIn, user, getToken, setUser, providerType]);

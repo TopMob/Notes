@@ -3,7 +3,8 @@ import { ISyncProvider, CloudPullResult } from './types';
 import { Notebook, Section, Page } from '../../types/notebook';
 import { Stroke, ShapeObject } from '../../types/canvas';
 import { TextBlock } from '../../types/textblock';
-import { compressBatch, decompressBatch, decompressJson } from './compression';
+import { compressBatch } from './compression';
+import { decodeCloudElements } from './cloudElements';
 
 /**
  * TursoProvider — реализация облачной синхронизации на базе Turso (libSQL/SQLite).
@@ -14,8 +15,9 @@ import { compressBatch, decompressBatch, decompressJson } from './compression';
  * (application-level / organizational security):
  * 1. Во ВСЕХ запросах (SELECT, INSERT, UPDATE, DELETE) фильтр `WHERE user_id = ?` и значение
  *    колонки `user_id` строго привязываются к авторизованному `currentUserId` через параметризованные args.
- * 2. Клиентский токен Turso (VITE_TURSO_AUTH_TOKEN) используется доверенным фронтенд-приложением.
- * 3. На клиенте исключена возможность подмены user_id или выполнения непараметризованных сырых SQL-запросов.
+ * 2. Клиентский токен Turso (VITE_TURSO_AUTH_TOKEN) доступен посетителю в опубликованном JS.
+ * 3. Фильтры ниже не являются границей безопасности: владелец токена может обращаться к БД напрямую.
+ *    Для реальной изоляции требуется серверная авторизация и отказ от общего токена в браузере.
  */
 export class TursoProvider implements ISyncProvider {
   name: 'turso' = 'turso';
@@ -163,77 +165,26 @@ export class TursoProvider implements ISyncProvider {
   async pullAll(userId: string, since: number = 0): Promise<CloudPullResult> {
     const client = this.getClient();
 
-    const [nbRes, secRes, pageRes, elRes] = await Promise.all([
-      client.execute({
-        sql: `SELECT id, title, created_at, updated_at, "order", deleted_at FROM notebooks WHERE user_id = ? AND updated_at > ?`,
-        args: [userId, since],
-      }),
-      client.execute({
-        sql: `SELECT id, notebook_id, title, color, "order", updated_at, deleted_at FROM sections WHERE user_id = ? AND updated_at > ?`,
-        args: [userId, since],
-      }),
-      client.execute({
-        sql: `SELECT id, section_id, title, created_at, updated_at, "order", camera, background, deleted_at FROM pages WHERE user_id = ? AND updated_at > ?`,
-        args: [userId, since],
-      }),
-      client.execute({
-        sql: `SELECT id, page_id, type, data, updated_at, deleted_at FROM page_elements WHERE user_id = ? AND updated_at > ?`,
-        args: [userId, since],
-      }),
-    ]);
+    const [nbRes, secRes, pageRes, elRes] = await client.batch([
+      {
+        sql: `SELECT id, title, created_at, updated_at, "order", deleted_at FROM notebooks WHERE user_id = ? AND (? = 0 OR updated_at > ?)`,
+        args: [userId, since, since],
+      },
+      {
+        sql: `SELECT id, notebook_id, title, color, "order", updated_at, deleted_at FROM sections WHERE user_id = ? AND (? = 0 OR updated_at > ?)`,
+        args: [userId, since, since],
+      },
+      {
+        sql: `SELECT id, section_id, title, created_at, updated_at, "order", camera, background, deleted_at FROM pages WHERE user_id = ? AND (? = 0 OR updated_at > ?)`,
+        args: [userId, since, since],
+      },
+      {
+        sql: `SELECT id, page_id, type, data, updated_at, deleted_at FROM page_elements WHERE user_id = ? AND (? = 0 OR updated_at > ?)`,
+        args: [userId, since, since],
+      },
+    ], 'read');
 
-    const parsedElements: CloudPullResult['elements'] = [];
-
-    for (const r of elRes.rows) {
-      const id = String(r.id);
-      const pageId = String(r.page_id);
-      const type = String(r.type);
-      const updatedAt = Number(r.updated_at);
-      const deletedAt = r.deleted_at ? Number(r.deleted_at) : null;
-
-      if (type === 'bundle') {
-        const bundle = await decompressBatch(r.data);
-        for (const stroke of bundle.strokes) {
-          parsedElements.push({
-            id: stroke.id,
-            pageId,
-            type: 'stroke',
-            data: stroke,
-            updatedAt,
-            deletedAt,
-          });
-        }
-        for (const shape of bundle.shapes) {
-          parsedElements.push({
-            id: shape.id,
-            pageId,
-            type: 'shape',
-            data: shape,
-            updatedAt,
-            deletedAt,
-          });
-        }
-        for (const tb of bundle.textBlocks) {
-          parsedElements.push({
-            id: tb.id,
-            pageId,
-            type: 'textBlock',
-            data: tb,
-            updatedAt,
-            deletedAt,
-          });
-        }
-      } else {
-        parsedElements.push({
-          id,
-          pageId,
-          type: type as 'stroke' | 'shape' | 'textBlock',
-          data: await decompressJson(r.data),
-          updatedAt,
-          deletedAt,
-        });
-      }
-    }
+    const parsedElements = await decodeCloudElements(elRes.rows as unknown as Record<string, any>[]);
 
     return {
       notebooks: nbRes.rows.map((r: any) => ({
@@ -261,7 +212,7 @@ export class TursoProvider implements ISyncProvider {
         updatedAt: Number(r.updated_at),
         order: Number(r.order),
         camera: r.camera ? JSON.parse(r.camera) : { x: 0, y: 0, zoom: 1 },
-        background: r.background ? JSON.parse(r.background) : { type: 'grid', color: '#ffffff' },
+        background: r.background ? JSON.parse(r.background) : 'grid-small',
         deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
       })),
       elements: parsedElements,

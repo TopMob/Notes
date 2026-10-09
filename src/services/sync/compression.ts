@@ -36,7 +36,7 @@ function getWorker(): Worker | null {
         type: 'module',
       });
       workerInstance.onmessage = (e: MessageEvent) => {
-        const { id, success, result, error, fallback } = e.data;
+        const { id, success, result, error } = e.data;
         const req = pendingWorkerRequests.get(id);
         if (req) {
           clearTimeout(req.timeout);
@@ -45,7 +45,7 @@ function getWorker(): Worker | null {
             req.resolve(result);
           } else {
             console.warn('[CompressionWorker] Worker error, using fallback:', error);
-            req.resolve(fallback ?? result);
+            req.reject(new Error(error || 'Ошибка обработки облачного пакета'));
           }
         }
       };
@@ -158,7 +158,7 @@ export async function decompressJson<T = any>(data: any): Promise<T> {
       return JSON.parse(text);
     } catch (err) {
       console.error('[Compression] Decompression failed:', err);
-      return data as any;
+      throw new Error('Повреждённый сжатый пакет облака. Локальные заметки не изменены.');
     }
   }
 
@@ -166,7 +166,7 @@ export async function decompressJson<T = any>(data: any): Promise<T> {
     try {
       return JSON.parse(data);
     } catch {
-      return data as any;
+      throw new Error('Некорректный JSON облака. Локальные заметки не изменены.');
     }
   }
 
@@ -196,6 +196,9 @@ export async function compressBatch(elements: {
  */
 export async function decompressBatch(data: any): Promise<PageElementsBundle> {
   const decompressed = await decompressJson<PageElementsBundle>(data);
+  if (!decompressed || !['strokes', 'shapes', 'textBlocks'].every(key => Array.isArray(decompressed[key as keyof PageElementsBundle]))) {
+    throw new Error('Неполный пакет страницы из облака. Локальные заметки не изменены.');
+  }
   return {
     strokes: Array.isArray(decompressed?.strokes) ? decompressed.strokes : [],
     shapes: Array.isArray(decompressed?.shapes) ? decompressed.shapes : [],

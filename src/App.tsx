@@ -18,7 +18,7 @@ import './styles/app.css';
 import { useCanvasStore } from './store/useCanvasStore';
 
 export const App: React.FC = () => {
-  const { init, isLoading } = useNotebookStore();
+  const { init, isLoading, loadError } = useNotebookStore();
   const { isZenMode, toggleZenMode, theme } = useUiStore();
 
   useEffect(() => {
@@ -59,6 +59,13 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isZenMode, toggleZenMode]);
+
+  if (loadError) {
+    return <div className="app-loading-screen"><div role="alert">
+      <p>{loadError}</p>
+      <button onClick={() => { void init(); }}>Повторить загрузку заметок</button>
+    </div></div>;
+  }
 
   if (isLoading) {
     return (

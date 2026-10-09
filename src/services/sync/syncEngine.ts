@@ -7,6 +7,7 @@ import { getDB } from '../../db/idb';
 import { Notebook, Section, Page } from '../../types/notebook';
 import { useNotebookStore } from '../../store/useNotebookStore';
 import { useCanvasStore } from '../../store/useCanvasStore';
+import { applyCloudPull, validateCloudPull } from './safePull';
 
 interface SyncStoreState {
   providerType: SyncProviderType;
@@ -60,6 +61,14 @@ export const useSyncStore = create<SyncStoreState>((set) => ({
 }));
 
 class SyncEngine {
+  private operationTail: Promise<void> = Promise.resolve();
+  private fullSyncPromise: Promise<SyncStats> | null = null;
+  private changeRevision = 0;
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.operationTail.then(operation);
+    this.operationTail = next.then(() => {}, () => {});
+    return next;
+  }
   private tursoProvider: TursoProvider;
   private supabaseProvider: SupabaseProvider;
   private idleTimer: any = null;
@@ -75,7 +84,7 @@ class SyncEngine {
     this.tursoProvider = new TursoProvider();
     this.supabaseProvider = new SupabaseProvider();
 
-    // При закрытии или сворачивании вкладки гарантированно отправляем накопившиеся данные
+    // Best effort only; browsers may stop network work when a tab closes.
     if (typeof window !== 'undefined') {
       window.addEventListener('beforeunload', () => {
         this.flushPendingChanges();
@@ -135,6 +144,7 @@ class SyncEngine {
   }
 
   public notifyChange(payload: SyncPayload) {
+    this.changeRevision++;
     const { userId, providerType } = useSyncStore.getState();
     if (providerType === 'local') {
       return; // Локальный режим, в облако ничего не отправляем
@@ -179,18 +189,24 @@ class SyncEngine {
    * Уведомление об удалении блокнотов, разделов или страниц
    */
   public notifyDelete(item: { notebookIds?: string[]; sectionIds?: string[]; pageIds?: string[] }) {
+    this.changeRevision++;
     const { userId, providerType } = useSyncStore.getState();
     if (!userId || providerType === 'local') return;
 
     const provider = this.getActiveProvider();
     if (!provider) return;
 
-    provider.deleteItems(userId, item).catch((err) => {
+    this.serialize(() => provider.deleteItems(userId, item)).catch((err) => {
       console.error('[SyncEngine] Error deleting items in cloud:', err);
+      useSyncStore.getState().setError('Не удалось отправить удаление в облако. Локальные записи сохранены.');
     });
   }
 
-  public async flushPendingChanges() {
+  public flushPendingChanges(): Promise<boolean> {
+    return this.serialize(() => this.flushPendingChangesNow());
+  }
+
+  private async flushPendingChangesNow(): Promise<boolean> {
     // Сбрасываем таймеры
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
@@ -207,7 +223,7 @@ class SyncEngine {
 
     const { userId } = useSyncStore.getState();
     const provider = this.getActiveProvider();
-    if (!userId || !provider) return;
+    if (!userId || !provider) return true;
 
     const pageElementIdsToFlush = Array.from(this.pendingPageElementIds);
     this.pendingPageElementIds.clear();
@@ -220,7 +236,7 @@ class SyncEngine {
       (this.pendingPayload.pageElements && this.pendingPayload.pageElements.pageId) ||
       pageElementIdsToFlush.length > 0;
 
-    if (!hasData) return;
+    if (!hasData) return true;
 
     const payload = { ...this.pendingPayload };
     this.pendingPayload = {};
@@ -251,8 +267,11 @@ class SyncEngine {
 
       this.retryDelay = 2000;
       useSyncStore.getState().setStatus('synced');
-      useSyncStore.getState().setLastSyncedAt(Date.now());
       useSyncStore.getState().setError(null);
+      const hasPending = this.pendingPageElementIds.size > 0 || ['notebooks', 'sections', 'pages'].some(key => this.pendingPayload[key as 'notebooks' | 'sections' | 'pages']?.length);
+      useSyncStore.getState().setStatus(hasPending ? 'syncing' : 'synced');
+      useSyncStore.getState().setLastSyncedAt(Date.now());
+      return true;
     } catch (err: any) {
       console.error('[SyncEngine] Error flushing changes, restoring payload to queue:', err);
       // ВОССТАНОВЛЕНИЕ В ОЧЕРЕДЬ: мержим обратно
@@ -268,6 +287,7 @@ class SyncEngine {
         this.flushPendingChanges();
       }, this.retryDelay);
       this.retryDelay = Math.min(this.retryDelay * 2, 60000);
+      return false;
     }
   }
 
@@ -276,9 +296,17 @@ class SyncEngine {
    * 1. Сбрасывает текущие очереди изменений в сеть.
    * 2. Выполняет PUSH локальных данных (блокноты, разделы, страницы, элементы), которых еще нет в облаке.
    * 3. Выполняет PULL облачных данных в локальную базу IndexedDB.
-   * 4. Синхронизирует удаления в обе стороны.
+   * 4. Применяет входящие данные атомарно; спорные замены и удаления сохраняют локальную версию.
    */
-  public async syncAll(): Promise<SyncStats> {
+  public syncAll(): Promise<SyncStats> {
+    if (this.fullSyncPromise) return this.fullSyncPromise;
+    const operation = this.serialize(() => this.syncAllNow());
+    this.fullSyncPromise = operation;
+    void operation.then(() => { this.fullSyncPromise = null; }, () => { this.fullSyncPromise = null; });
+    return operation;
+  }
+
+  private async syncAllNow(): Promise<SyncStats> {
     const { userId } = useSyncStore.getState();
     const provider = this.getActiveProvider();
     if (!userId || !provider) {
@@ -292,9 +320,12 @@ class SyncEngine {
 
     try {
       // 1. Сначала сбрасываем накопившиеся изменения из очереди
-      await this.flushPendingChanges();
+      await useCanvasStore.getState().flushAllSaves();
+      if (!await this.flushPendingChangesNow()) throw new Error('Отправка изменений не завершена. Загрузка облака приостановлена, локальные заметки сохранены.');
 
       // 2. Читаем все локальные данные из IndexedDB
+      const snapshotRevision = this.changeRevision;
+      const snapshotEdits = useCanvasStore.getState().getEditRevision();
       const db = await getDB();
       const localNotebooks = await db.getAll('notebooks');
       const localSections = await db.getAll('sections');
@@ -302,6 +333,10 @@ class SyncEngine {
 
       // 3. Получаем все данные из облака
       const cloudData = await provider.pullAll(userId);
+      validateCloudPull(cloudData);
+      if (snapshotRevision !== this.changeRevision || snapshotEdits !== useCanvasStore.getState().getEditRevision()) throw new Error('Во время загрузки облака появились локальные правки. Входящая синхронизация отменена; повторите после сохранения.');
+      if (useSyncStore.getState().userId !== userId || this.getActiveProvider() !== provider) throw new Error('Аккаунт или провайдер изменился во время синхронизации');
+      const pushedPageIds = new Set<string>();
 
       const cloudNbMap = new Map(cloudData.notebooks.map((n) => [n.id, n]));
       const cloudSecMap = new Map(cloudData.sections.map((s) => [s.id, s]));
@@ -363,10 +398,6 @@ class SyncEngine {
         } else {
           if (!cPg) {
             pagesToPush.push(pg);
-          } else if (cPg.deletedAt && (pg.updatedAt || 0) > (cPg.deletedAt || 0)) {
-            pagesToPush.push(pg);
-          } else if ((pg.updatedAt || 0) > (cPg.updatedAt || 0) || pg.title !== cPg.title) {
-            pagesToPush.push(pg);
           }
         }
       }
@@ -374,17 +405,10 @@ class SyncEngine {
       if (pagesToPush.length > 0) {
         await provider.pushPages(userId, pagesToPush);
         pushedPages += pagesToPush.length;
+        for (const page of pagesToPush) pushedPageIds.add(page.id);
       }
 
       // Г) Элементы страниц (штрихи, рисунки, фигуры, текст)
-      // Считаем количество активных элементов в облаке для каждой страницы
-      const cloudElementsCountByPage = new Map<string, number>();
-      for (const el of cloudData.elements) {
-        if (!el.deletedAt) {
-          cloudElementsCountByPage.set(el.pageId, (cloudElementsCountByPage.get(el.pageId) || 0) + 1);
-        }
-      }
-
       let pushedElements = 0;
       for (const pg of localPages) {
         if (pg.deletedAt) continue;
@@ -393,20 +417,15 @@ class SyncEngine {
           pageData.strokes.length + pageData.shapes.length + pageData.textBlocks.length;
         const hasLocalElements = localElementsCount > 0;
 
-        const cloudElemCount = cloudElementsCountByPage.get(pg.id) || 0;
         const cPg = cloudPageMap.get(pg.id);
-        const isNewerLocally = (pg.updatedAt || 0) >= (cPg?.updatedAt || 0);
 
-        // Отправляем элементы страницы в облако если:
-        // 1. У нас есть локальные элементы (рисунки/текст), а в облаке их 0 (наш случай с ноутбуком!)
-        // 2. Страница была в списке pagesToPush (новая или обновленная страница)
-        // 3. Локальные данные новее и у нас есть локальные элементы
-        if (
-          (hasLocalElements && cloudElemCount === 0) ||
-          pagesToPush.some((p) => p.id === pg.id) ||
-          (hasLocalElements && isNewerLocally)
-        ) {
+        // Automatic reconciliation uploads only pages absent from the cloud.
+        // Existing pages are sent through the explicit local-change queue, not timestamp guesses.
+        if (!cPg && (hasLocalElements || pagesToPush.some((p) => p.id === pg.id))) {
+          this.pendingPageElementIds.add(pg.id);
           await provider.pushPageElements(userId, pg.id, pageData);
+          if (this.changeRevision === snapshotRevision) this.pendingPageElementIds.delete(pg.id);
+          pushedPageIds.add(pg.id);
           pushedElements += localElementsCount;
         }
       }
@@ -418,143 +437,19 @@ class SyncEngine {
         });
       }
 
-      // 5. ЭТАП PULL: облачные данные -> в локальную базу IndexedDB
-      const localNbMap = new Map(localNotebooks.map((n) => [n.id, n]));
-      const localSecMap = new Map(localSections.map((s) => [s.id, s]));
-      const localPageMap = new Map(localPages.map((p) => [p.id, p]));
-
-      const fallbackSecId =
-        localSections.find((s) => !s.deletedAt)?.id ||
-        cloudData.sections.find((s) => !s.deletedAt)?.id ||
-        'sec-quick-notes';
-
-      // Блокноты
-      for (const cNb of cloudData.notebooks) {
-        if (cNb.deletedAt) {
-          if (localNbMap.has(cNb.id)) {
-            await db.delete('notebooks', cNb.id);
-            pulledNotebooks++;
-          }
-        } else {
-          const lNb = localNbMap.get(cNb.id);
-          if (!lNb || (cNb.updatedAt || 0) > (lNb.updatedAt || 0) || lNb.title !== cNb.title) {
-            await db.put('notebooks', {
-              id: cNb.id,
-              title: cNb.title,
-              createdAt: cNb.createdAt,
-              updatedAt: cNb.updatedAt,
-              order: cNb.order,
-            });
-            pulledNotebooks++;
-          }
-        }
-      }
-
-      // Разделы
-      for (const cSec of cloudData.sections) {
-        if (cSec.deletedAt) {
-          if (localSecMap.has(cSec.id)) {
-            await db.delete('sections', cSec.id);
-            pulledSections++;
-          }
-        } else {
-          const lSec = localSecMap.get(cSec.id);
-          if (
-            !lSec ||
-            (cSec.updatedAt || 0) > (lSec.updatedAt || 0) ||
-            lSec.title !== cSec.title ||
-            lSec.color !== cSec.color
-          ) {
-            await db.put('sections', {
-              id: cSec.id,
-              notebookId: cSec.notebookId,
-              title: cSec.title,
-              color: cSec.color,
-              order: cSec.order,
-              updatedAt: cSec.updatedAt,
-            });
-            pulledSections++;
-          }
-        }
-      }
-
-      // Страницы
-      for (const cPg of cloudData.pages) {
-        if (cPg.deletedAt) {
-          if (localPageMap.has(cPg.id)) {
-            await db.delete('pages', cPg.id);
-            pulledPages++;
-          }
-        } else {
-          const lPg = localPageMap.get(cPg.id);
-          if (!lPg || (cPg.updatedAt || 0) > (lPg.updatedAt || 0) || lPg.title !== cPg.title) {
-            await db.put('pages', {
-              id: cPg.id,
-              sectionId: cPg.sectionId || fallbackSecId,
-              title: cPg.title,
-              createdAt: cPg.createdAt,
-              updatedAt: cPg.updatedAt,
-              order: cPg.order,
-              camera: cPg.camera,
-              background: cPg.background,
-            });
-            pulledPages++;
-          }
-        }
-      }
-
-      // Элементы страниц
-      if (cloudData.elements.length > 0) {
-        const tx = db.transaction(['strokes', 'shapes', 'textBlocks'], 'readwrite');
-        const strokeStore = tx.objectStore('strokes');
-        const shapeStore = tx.objectStore('shapes');
-        const tbStore = tx.objectStore('textBlocks');
-
-        for (const el of cloudData.elements) {
-          if (el.deletedAt) {
-            if (el.type === 'stroke') await strokeStore.delete(el.id);
-            else if (el.type === 'shape') await shapeStore.delete(el.id);
-            else if (el.type === 'textBlock') await tbStore.delete(el.id);
-          } else {
-            if (el.type === 'stroke') {
-              await strokeStore.put(el.data);
-              pulledElements++;
-            } else if (el.type === 'shape') {
-              await shapeStore.put(el.data);
-              pulledElements++;
-            } else if (el.type === 'textBlock') {
-              await tbStore.put(el.data);
-              pulledElements++;
-            }
-          }
-        }
-        await tx.done;
-      }
+      if (snapshotRevision !== this.changeRevision || snapshotEdits !== useCanvasStore.getState().getEditRevision()) throw new Error('Локальные заметки изменились во время отправки. Загрузка облака приостановлена.');
+      const protectedPageIds = new Set([...pushedPageIds, ...this.pendingPageElementIds, ...useCanvasStore.getState().getUnsavedPageIds()]);
+      const editRevision = useCanvasStore.getState().getEditRevision();
+      const changeRevision = this.changeRevision;
+      const result = await applyCloudPull(db, cloudData, protectedPageIds, () =>
+        useCanvasStore.getState().getEditRevision() === editRevision && this.changeRevision === changeRevision &&
+        useSyncStore.getState().userId === userId && this.getActiveProvider() === provider);
+      ({ notebooks: pulledNotebooks, sections: pulledSections, pages: pulledPages, elements: pulledElements } = result.pulled);
 
       // 6. Обновление UI хранилища
-      const hasChanges =
-        pulledNotebooks > 0 ||
-        pulledSections > 0 ||
-        pulledPages > 0 ||
-        pulledElements > 0 ||
-        pushedNotebooks > 0 ||
-        pushedSections > 0 ||
-        pushedPages > 0 ||
-        pushedElements > 0;
-
-      if (hasChanges) {
+      const hasChanges = pulledNotebooks > 0 || pulledSections > 0 || pulledPages > 0 || pulledElements > 0;
+      if (hasChanges && useCanvasStore.getState().saveStatus === 'saved') {
         await useNotebookStore.getState().refreshFromStorage();
-      }
-
-      const activePageId = useCanvasStore.getState().currentPageId;
-      if (activePageId) {
-        const pageData = await loadPageData(activePageId);
-        useCanvasStore.getState().spatialIndex.rebuild([...pageData.strokes, ...pageData.shapes]);
-        useCanvasStore.setState({
-          strokes: pageData.strokes,
-          shapes: pageData.shapes,
-          textBlocks: pageData.textBlocks,
-        });
       }
 
       console.log(
@@ -563,8 +458,10 @@ class SyncEngine {
 
       this.retryDelay = 2000;
       useSyncStore.getState().setStatus('synced');
-      useSyncStore.getState().setLastSyncedAt(Date.now());
       useSyncStore.getState().setError(null);
+
+      if (result.conflicts.size) useSyncStore.getState().setError(`Различаются версии ${result.conflicts.size} страниц. Локальные рисунки и текст сохранены; автоматическая замена и облачное удаление этих страниц приостановлены.`);
+      else useSyncStore.getState().setLastSyncedAt(Date.now());
 
       return {
         pushed: {
@@ -592,6 +489,9 @@ class SyncEngine {
         msg = 'Сервер недоступен (блокировка сети или сбой TLS). Рекомендуем переключиться на Turso.';
       }
       useSyncStore.getState().setError(msg);
+      if (this.pendingPageElementIds.size && !this.retryTimer) {
+        this.retryTimer = setTimeout(() => { this.retryTimer = null; void this.flushPendingChanges(); }, this.retryDelay);
+      }
       throw err;
     }
   }

@@ -169,6 +169,8 @@ interface CanvasState {
 
   flushSave: (targetPageId?: string) => Promise<void>;
   flushAllSaves: () => Promise<void>;
+  getUnsavedPageIds: () => string[];
+  getEditRevision: () => number;
   triggerAutosave: () => void;
 }
 
@@ -1153,6 +1155,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     flushSave,
+    getUnsavedPageIds: () => [...new Set([...pageDirtyMap.keys(), ...pendingSaves.keys()])],
+    getEditRevision: () => editSequence,
     flushAllSaves: async () => {
       const ids = new Set([...pageDirtyMap.keys(), ...pendingSaves.keys()]);
       for (const id of ids) await flushSave(id);
