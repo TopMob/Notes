@@ -8,6 +8,9 @@ import { Notebook, Section, Page } from '../../types/notebook';
 import { useNotebookStore } from '../../store/useNotebookStore';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { applyCloudPull, validateCloudPull } from './safePull';
+import { acknowledgeOutbox, pendingOutbox, readOutboxSnapshot, queueLocalChange, outboxSessionId } from './outbox';
+import { isSyncOwner, rememberSyncOwner } from './outboxContext';
+import { checkOutboxReplay } from './replaySafety';
 
 interface SyncStoreState {
   providerType: SyncProviderType;
@@ -45,6 +48,7 @@ export const useSyncStore = create<SyncStoreState>((set) => ({
     set({ providerType: type });
   },
   setUser: (userId) => {
+    rememberSyncOwner(userId);
     set({ userId });
     if (userId) {
       syncEngine.flushPendingChanges();
@@ -65,7 +69,10 @@ class SyncEngine {
   private fullSyncPromise: Promise<SyncStats> | null = null;
   private changeRevision = 0;
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
-    const next = this.operationTail.then(operation);
+    const next = this.operationTail.then(async (): Promise<T> => {
+      if (typeof navigator !== 'undefined' && navigator.locks) return await navigator.locks.request('notes-cloud-sync', operation);
+      return await operation();
+    });
     this.operationTail = next.then(() => {}, () => {});
     return next;
   }
@@ -77,7 +84,6 @@ class SyncEngine {
   private retryDelay = 2000;
   private readonly IDLE_DELAY = 3000; // 3 секунды тишины для автосохранения
   private readonly MAX_WAIT = 15000;  // 15 секунд непрерывной работы
-  private pendingPayload: SyncPayload = {};
   private pendingPageElementIds = new Set<string>();
 
   constructor() {
@@ -108,41 +114,6 @@ class SyncEngine {
     return null; // 'local'
   }
 
-  private mergePayloads(prev: SyncPayload, next: SyncPayload): SyncPayload {
-    const mergeById = <T extends { id: string }>(a: T[] = [], b: T[] = []): T[] => {
-      const map = new Map<string, T>();
-      for (const item of a) map.set(item.id, item);
-      for (const item of b) map.set(item.id, item);
-      return Array.from(map.values());
-    };
-
-    const hasNextElements = next.pageElements && next.pageElements.pageId;
-    const isSamePage = prev.pageElements?.pageId === next.pageElements?.pageId;
-
-    return {
-      notebooks: mergeById(prev.notebooks, next.notebooks),
-      sections: mergeById(prev.sections, next.sections),
-      pages: mergeById(prev.pages, next.pages),
-      pageElements: hasNextElements
-        ? {
-            pageId: next.pageElements!.pageId,
-            strokes: mergeById(
-              isSamePage ? prev.pageElements?.strokes : [],
-              next.pageElements!.strokes
-            ),
-            shapes: mergeById(
-              isSamePage ? prev.pageElements?.shapes : [],
-              next.pageElements!.shapes
-            ),
-            textBlocks: mergeById(
-              isSamePage ? prev.pageElements?.textBlocks : [],
-              next.pageElements!.textBlocks
-            ),
-          }
-        : prev.pageElements,
-    };
-  }
-
   public notifyChange(payload: SyncPayload) {
     this.changeRevision++;
     const { userId, providerType } = useSyncStore.getState();
@@ -154,11 +125,10 @@ class SyncEngine {
       this.pendingPageElementIds.add(payload.pageElements.pageId);
     }
 
-    // Всегда сохраняем в очередь изменений
-    this.pendingPayload = this.mergePayloads(this.pendingPayload, payload);
+    // Intent was committed atomically by storage.ts; this notification only wakes the sender.
 
     if (!userId) {
-      // Если Clerk еще загружается, изменения сохранены в pendingPayload и уйдут после вызова setUser / syncAll
+      // Unsent intent survives in IndexedDB even while authentication is loading.
       return;
     }
 
@@ -188,18 +158,12 @@ class SyncEngine {
   /**
    * Уведомление об удалении блокнотов, разделов или страниц
    */
-  public notifyDelete(item: { notebookIds?: string[]; sectionIds?: string[]; pageIds?: string[] }) {
+  public notifyDelete(_item: { notebookIds?: string[]; sectionIds?: string[]; pageIds?: string[] }) {
     this.changeRevision++;
     const { userId, providerType } = useSyncStore.getState();
     if (!userId || providerType === 'local') return;
 
-    const provider = this.getActiveProvider();
-    if (!provider) return;
-
-    this.serialize(() => provider.deleteItems(userId, item)).catch((err) => {
-      console.error('[SyncEngine] Error deleting items in cloud:', err);
-      useSyncStore.getState().setError('Не удалось отправить удаление в облако. Локальные записи сохранены.');
-    });
+    void this.flushPendingChanges();
   }
 
   public flushPendingChanges(): Promise<boolean> {
@@ -225,68 +189,66 @@ class SyncEngine {
     const provider = this.getActiveProvider();
     if (!userId || !provider) return true;
 
-    const pageElementIdsToFlush = Array.from(this.pendingPageElementIds);
-    this.pendingPageElementIds.clear();
-
-    // Проверяем, есть ли накопленные данные
-    const hasData =
-      (this.pendingPayload.notebooks && this.pendingPayload.notebooks.length > 0) ||
-      (this.pendingPayload.sections && this.pendingPayload.sections.length > 0) ||
-      (this.pendingPayload.pages && this.pendingPayload.pages.length > 0) ||
-      (this.pendingPayload.pageElements && this.pendingPayload.pageElements.pageId) ||
-      pageElementIdsToFlush.length > 0;
-
-    if (!hasData) return true;
-
-    const payload = { ...this.pendingPayload };
-    this.pendingPayload = {};
-
-    if (payload.pageElements?.pageId && !pageElementIdsToFlush.includes(payload.pageElements.pageId)) {
-      pageElementIdsToFlush.push(payload.pageElements.pageId);
-    }
-
-    useSyncStore.getState().setStatus('syncing');
-
     try {
-      if (payload.notebooks && payload.notebooks.length > 0) {
-        await provider.pushNotebooks(userId, payload.notebooks);
+      if (!isSyncOwner(userId)) throw new Error('Локальные заметки связаны с другим аккаунтом. Отправка в этот аккаунт остановлена.');
+      const binding = { provider: useSyncStore.getState().providerType as 'turso' | 'supabase', userId };
+      if ((await pendingOutbox({ ...binding, userId: null })).length) {
+        useSyncStore.getState().setError('Есть локальные правки, сделанные до входа. В настройках облака выберите, отправлять ли их в этот аккаунт.');
+        return false;
       }
-      if (payload.sections && payload.sections.length > 0) {
-        await provider.pushSections(userId, payload.sections);
+      const entries = await pendingOutbox(binding);
+      if (!entries.length) { this.pendingPageElementIds.clear(); return true; }
+      useSyncStore.getState().setStatus('syncing');
+      const restoredCloud = entries.some(entry => entry.sessionId !== outboxSessionId) ? await provider.pullAll(userId) : null;
+      if (restoredCloud) validateCloudPull(restoredCloud);
+      const assertContext = () => {
+        if (useSyncStore.getState().userId !== userId || this.getActiveProvider() !== provider || !isSyncOwner(userId)) throw new Error('Аккаунт или провайдер изменился; очередь сохранена для повтора.');
+      };
+      entries.sort((a, b) => ['notebooks', 'sections', 'pages'].indexOf(a.entity) - ['notebooks', 'sections', 'pages'].indexOf(b.entity));
+      for (const entry of entries) {
+        assertContext();
+        const snapshot = await readOutboxSnapshot(entry);
+        if (!snapshot) continue; // A newer operation replaced this entry.
+        assertContext();
+        if (restoredCloud && entry.sessionId !== outboxSessionId) {
+          const replay = checkOutboxReplay(snapshot, restoredCloud);
+          if (replay === 'conflict') {
+            useSyncStore.getState().setError('После перезапуска локальные правки из очереди отличаются от облака. Обе версии оставлены на своих местах; автоматическая отправка остановлена до выбора версии.');
+            return false;
+          }
+          if (replay === 'acknowledged') { await acknowledgeOutbox(entry); continue; }
+        }
+        if (entry.action === 'delete' || snapshot.record?.deletedAt) {
+          const field = entry.entity === 'notebooks' ? 'notebookIds' : entry.entity === 'sections' ? 'sectionIds' : 'pageIds';
+          await provider.deleteItems(userId, { [field]: [entry.entityId] });
+        } else {
+          if (!snapshot.record) throw new Error('Объект из очереди отсутствует локально. Отправка пустой страницы заблокирована.');
+          if (entry.entity === 'notebooks') await provider.pushNotebooks(userId, [snapshot.notebook!]);
+          else if (entry.entity === 'sections') await provider.pushSections(userId, [snapshot.section!]);
+          else {
+            await provider.pushPages(userId, [snapshot.page!]);
+            assertContext();
+            await provider.pushPageElements(userId, entry.entityId, snapshot.elements!);
+          }
+        }
+        assertContext();
+        await acknowledgeOutbox(entry);
       }
-      if (payload.pages && payload.pages.length > 0) {
-        await provider.pushPages(userId, payload.pages);
-      }
-
-      // Для каждой изменённой страницы отправляем ПОЛНЫЙ срез данных из IndexedDB
-      // Это гарантирует, что штрихи не затираются частичными diff-пакетами!
-      for (const pageId of pageElementIdsToFlush) {
-        const fullPageData = await loadPageData(pageId);
-        await provider.pushPageElements(userId, pageId, fullPageData);
-      }
-
+      const remaining = await pendingOutbox(binding);
+      this.pendingPageElementIds = new Set(remaining.filter(entry => entry.entity === 'pages').map(entry => entry.entityId));
       this.retryDelay = 2000;
-      useSyncStore.getState().setStatus('synced');
       useSyncStore.getState().setError(null);
-      const hasPending = this.pendingPageElementIds.size > 0 || ['notebooks', 'sections', 'pages'].some(key => this.pendingPayload[key as 'notebooks' | 'sections' | 'pages']?.length);
-      useSyncStore.getState().setStatus(hasPending ? 'syncing' : 'synced');
+      useSyncStore.getState().setStatus(remaining.length ? 'syncing' : 'synced');
       useSyncStore.getState().setLastSyncedAt(Date.now());
+      if (remaining.length && !this.idleTimer) this.idleTimer = setTimeout(() => { this.idleTimer = null; void this.flushPendingChanges(); }, 500);
       return true;
     } catch (err: any) {
-      console.error('[SyncEngine] Error flushing changes, restoring payload to queue:', err);
-      // ВОССТАНОВЛЕНИЕ В ОЧЕРЕДЬ: мержим обратно
-      this.pendingPayload = this.mergePayloads(payload, this.pendingPayload);
-      for (const id of pageElementIdsToFlush) {
-        this.pendingPageElementIds.add(id);
-      }
+      console.error('[SyncEngine] Durable queue retained after send failure:', err);
       useSyncStore.getState().setError(err.message || 'Ошибка синхронизации');
-
-      // Планируем повтор с экспоненциальным backoff
-      this.retryTimer = setTimeout(() => {
-        this.retryTimer = null;
-        this.flushPendingChanges();
-      }, this.retryDelay);
-      this.retryDelay = Math.min(this.retryDelay * 2, 60000);
+      if (useSyncStore.getState().userId === userId && this.getActiveProvider() === provider && isSyncOwner(userId)) {
+        this.retryTimer = setTimeout(() => { this.retryTimer = null; void this.flushPendingChanges(); }, this.retryDelay);
+        this.retryDelay = Math.min(this.retryDelay * 2, 60000);
+      }
       return false;
     }
   }
@@ -321,7 +283,7 @@ class SyncEngine {
     try {
       // 1. Сначала сбрасываем накопившиеся изменения из очереди
       await useCanvasStore.getState().flushAllSaves();
-      if (!await this.flushPendingChangesNow()) throw new Error('Отправка изменений не завершена. Загрузка облака приостановлена, локальные заметки сохранены.');
+      if (!await this.flushPendingChangesNow()) throw new Error(useSyncStore.getState().errorMessage || 'Отправка изменений не завершена. Загрузка облака приостановлена, локальные заметки сохранены.');
 
       // 2. Читаем все локальные данные из IndexedDB
       const snapshotRevision = this.changeRevision;
@@ -403,7 +365,6 @@ class SyncEngine {
       }
 
       if (pagesToPush.length > 0) {
-        await provider.pushPages(userId, pagesToPush);
         pushedPages += pagesToPush.length;
         for (const page of pagesToPush) pushedPageIds.add(page.id);
       }
@@ -422,9 +383,10 @@ class SyncEngine {
         // Automatic reconciliation uploads only pages absent from the cloud.
         // Existing pages are sent through the explicit local-change queue, not timestamp guesses.
         if (!cPg && (hasLocalElements || pagesToPush.some((p) => p.id === pg.id))) {
-          this.pendingPageElementIds.add(pg.id);
-          await provider.pushPageElements(userId, pg.id, pageData);
-          if (this.changeRevision === snapshotRevision) this.pendingPageElementIds.delete(pg.id);
+          const tx = db.transaction('syncOutbox', 'readwrite');
+          await queueLocalChange(tx, 'pages', pg.id);
+          await tx.done;
+          if (!await this.flushPendingChangesNow()) throw new Error(useSyncStore.getState().errorMessage || 'Содержимое новой страницы осталось в очереди для повтора.');
           pushedPageIds.add(pg.id);
           pushedElements += localElementsCount;
         }
@@ -438,7 +400,8 @@ class SyncEngine {
       }
 
       if (snapshotRevision !== this.changeRevision || snapshotEdits !== useCanvasStore.getState().getEditRevision()) throw new Error('Локальные заметки изменились во время отправки. Загрузка облака приостановлена.');
-      const protectedPageIds = new Set([...pushedPageIds, ...this.pendingPageElementIds, ...useCanvasStore.getState().getUnsavedPageIds()]);
+      const pending = await pendingOutbox({ provider: useSyncStore.getState().providerType as 'turso' | 'supabase', userId });
+      const protectedPageIds = new Set([...pushedPageIds, ...pending.filter(entry => entry.entity === 'pages').map(entry => entry.entityId), ...useCanvasStore.getState().getUnsavedPageIds()]);
       const editRevision = useCanvasStore.getState().getEditRevision();
       const changeRevision = this.changeRevision;
       const result = await applyCloudPull(db, cloudData, protectedPageIds, () =>

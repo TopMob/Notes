@@ -1,5 +1,6 @@
 // Fresh Chromium context and local fixture only; never opens the deployed app.
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'vite';
 
@@ -30,10 +31,14 @@ try {
   await server.listen();
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
+  await context.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+  await context.route('**/src/services/sync/tursoProvider.ts*', route => route.fulfill({ contentType: 'application/javascript', body: 'export class TursoProvider {}' }));
+  await context.route('**/src/services/sync/supabaseProvider.ts*', route => route.fulfill({ contentType: 'application/javascript', body: 'export class SupabaseProvider { setTokenProvider() {} }' }));
+  await context.route('**/src/store/useNotebookStore.ts*', route => route.fulfill({ contentType: 'application/javascript', body: 'export const useNotebookStore = { getState: () => ({ refreshFromStorage: async () => {} }) };' }));
   const page = await context.newPage();
   const unexpected = [];
   page.on('pageerror', error => unexpected.push(error.message));
-  await page.route('**/src/db/storage.ts*', route => route.fulfill({ contentType: 'application/javascript', body: `
+  await page.route('**/src/db/storage.ts*', route => route.request().url().includes('outbox-test') ? route.continue() : route.fulfill({ contentType: 'application/javascript', body: `
     export async function savePageDiff(id, diff) {
       if (window.fixtureFailure) throw new Error('Simulated IndexedDB quota failure');
       window.fixtureWrites.push({ id, diff });
@@ -59,7 +64,6 @@ try {
     const { applyCloudPull } = await import('/src/services/sync/safePull.ts');
     const { decodeCloudElements } = await import('/src/services/sync/cloudElements.ts');
     const { compressBatch, decompressBatch } = await import('/src/services/sync/compression.ts');
-    const db = await getDB();
     const stores = ['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'];
     const check = (condition, message) => { if (!condition) throw Error(message); };
     const reject = async (work, message) => { try { await work(); } catch { return; } throw Error(message); };
@@ -67,7 +71,30 @@ try {
     const section = { id: 'sec', notebookId: 'n', title: 'Keep section', color: 'red', order: 0, updatedAt: 10 };
     const originalPage = { id: 'p', sectionId: 'sec', title: 'Keep page', createdAt: 1, updatedAt: 10, order: 0, camera: { x: 0, y: 0, zoom: 1 }, background: 'plain', slug: 'keep', slugAliases: ['old-link'] };
     const stroke = { id: 's', pageId: 'p', points: [{ x: 1, y: 2 }], color: 'black', baseWidth: 3, opacity: 1, tool: 'pen', bounds: { minX: 1, minY: 2, maxX: 1, maxY: 2 }, createdAt: 1 };
-    await db.put('notebooks', notebook); await db.put('sections', section); await db.put('pages', originalPage); await db.put('strokes', stroke);
+    const legacy = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('onenote_clone_db', 2);
+      request.onupgradeneeded = () => {
+        const indexes = { notebooks: { 'by-order': 'order' }, sections: { 'by-notebook': 'notebookId', 'by-order': 'order' }, pages: { 'by-section': 'sectionId', 'by-order': 'order' }, strokes: { 'by-page': 'pageId' }, shapes: { 'by-page': 'pageId' }, textBlocks: { 'by-page': 'pageId' }, assets: { 'by-page': 'pageId' } };
+        for (const [name, entries] of Object.entries(indexes)) {
+          const store = request.result.createObjectStore(name, { keyPath: 'id' });
+          for (const [index, key] of Object.entries(entries)) store.createIndex(index, key);
+        }
+      };
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    const seed = legacy.transaction([...stores, 'assets'], 'readwrite');
+    seed.objectStore('notebooks').put(notebook); seed.objectStore('sections').put(section); seed.objectStore('pages').put(originalPage); seed.objectStore('strokes').put(stroke);
+    seed.objectStore('pages').put({ ...originalPage, id: 'trash-page', deletedAt: 2 });
+    seed.objectStore('assets').put({ id: 'original-image', pageId: 'p', blob: new Blob(['original image bytes']), mimeType: 'image/png', createdAt: 1 });
+    await new Promise((resolve, reject) => { seed.oncomplete = resolve; seed.onabort = () => reject(seed.error); });
+    let blocked = false;
+    try { await getDB(); } catch (error) { blocked = error.message.includes('Закройте другие вкладки'); }
+    check(blocked, 'Blocked schema upgrade did not offer recovery');
+    legacy.close();
+    const db = await getDB();
+    check(db.version === 3 && db.objectStoreNames.contains('syncOutbox'), 'Additive upgrade failed');
+    check((await db.get('pages', 'trash-page')).deletedAt === 2, 'Upgrade lost trash');
+    check(await (await db.get('assets', 'original-image')).blob.text() === 'original image bytes', 'Upgrade changed binary asset');
     const snapshot = async () => JSON.stringify(await Promise.all(stores.map(name => db.getAll(name))));
     const initial = await snapshot();
     const empty = () => ({ notebooks: [], sections: [], pages: [], elements: [] });
@@ -106,10 +133,138 @@ try {
     check(decoded.length === 1 && decoded[0].id === 's', 'Legacy row resurrected beside full bundle');
     rawRows[1].data = await compressBatch({ strokes: [], shapes: [], textBlocks: [] });
     check((await decodeCloudElements(rawRows)).length === 0, 'Empty authoritative bundle resurrected legacy row');
-    db.close();
     return 'Real IndexedDB: empty/incomplete cloud, conflicts, tombstones, rollback, edits during pull, new-note import, aliases and bundle precedence passed.';
   });
   console.log(results);
+
+  const durable = await page.evaluate(async () => {
+    const storage = await import('/src/db/storage.ts?outbox-test');
+    const { getDB } = await import('/src/db/idb.ts');
+    const outbox = await import('/src/services/sync/outbox.ts');
+    const { syncEngine, useSyncStore } = await import('/src/services/sync/syncEngine.ts');
+    const db = await getDB();
+    const check = (condition, message) => { if (!condition) throw Error(message); };
+    localStorage.setItem('onenote_sync_owner', 'fixture-user');
+    const binding = { userId: 'fixture-user', provider: 'turso' };
+    await storage.savePageDiff('p', { metadata: { title: 'First durable edit' } });
+    const first = (await outbox.pendingOutbox(binding))[0];
+    check(first && !('strokes' in first) && !('textBlocks' in first), 'Queue duplicated content');
+    await storage.savePageDiff('p', { metadata: { title: 'Newer durable edit' } });
+    const newer = (await outbox.pendingOutbox(binding))[0];
+    await outbox.acknowledgeOutbox(first);
+    check((await outbox.pendingOutbox(binding))[0].operationId === newer.operationId, 'Old acknowledgement removed newer work');
+    check(await outbox.readOutboxSnapshot(first) === null, 'Old operation obtained a new payload');
+    check((await outbox.readOutboxSnapshot(newer)).page.title === 'Newer durable edit', 'Snapshot did not retain latest metadata');
+    check((await outbox.pendingOutbox({ ...binding, userId: 'another-user' })).length === 0, 'Queue crossed account boundary');
+    check((await outbox.pendingOutbox({ ...binding, provider: 'supabase' })).length === 0, 'Queue crossed provider boundary');
+    const before = JSON.stringify(await db.get('pages', 'p'));
+    const tx = db.transaction(['pages', 'syncOutbox'], 'readwrite');
+    await tx.objectStore('pages').put({ ...JSON.parse(before), title: 'Must roll back' });
+    const failing = { done: tx.done, abort: () => tx.abort(), objectStore() { return { put() { throw Error('Simulated queue write failure'); } }; } };
+    let rejected = false; try { await outbox.queueLocalChange(failing, 'pages', 'p', 'put', binding); } catch { rejected = true; }
+    await tx.done.catch(() => {});
+    check(rejected && JSON.stringify(await db.get('pages', 'p')) === before, 'Queue failure committed local-only half of transaction');
+    const realTx = db.transaction('syncOutbox', 'readwrite');
+    await outbox.queueLocalChange(realTx, 'pages', 'p', 'put', { ...binding, userId: null }); await realTx.done;
+    await outbox.claimUnownedOutbox(binding);
+    check((await outbox.pendingOutbox({ ...binding, userId: null })).length === 0, 'Explicit claim left anonymous entry');
+    await outbox.acknowledgeOutbox(newer);
+    check((await outbox.pendingOutbox(binding)).length === 1, 'Old acknowledgement removed claimed work');
+    await storage.moveToTrashPage('p'); check((await outbox.pendingOutbox(binding))[0].action === 'delete', 'Trash did not persist delete intent');
+    await storage.restorePage('p'); check((await outbox.pendingOutbox(binding))[0].action === 'put', 'Restore did not supersede delete');
+    await storage.createNotebook({ id: 'new-n', title: 'New notebook', createdAt: 1, order: 20 });
+    await storage.createSection({ id: 'new-sec', notebookId: 'new-n', title: 'New section', color: 'red', order: 0 });
+    await storage.createPage({ ...(await db.get('pages', 'p')), id: 'new-p', sectionId: 'new-sec' });
+    check((await outbox.pendingOutbox(binding)).length === 4, 'Structural creations were not tracked');
+    await storage.renameNotebook('new-n', 'Renamed notebook'); await storage.updateSection('new-sec', { title: 'Renamed section' });
+    check((await outbox.pendingOutbox(binding)).length === 4, 'Repeated structural edits grew the queue');
+    await storage.deletePage('new-p');
+    const deletion = (await outbox.pendingOutbox(binding)).find(entry => entry.entityId === 'new-p');
+    check(deletion.action === 'delete' && !(await outbox.readOutboxSnapshot(deletion)).record, 'Permanent deletion lost its explicit intent');
+    for (const entry of await outbox.pendingOutbox(binding)) if (entry.entityId !== 'p') await outbox.acknowledgeOutbox(entry);
+    localStorage.setItem('onenote_sync_provider', 'local');
+    const beforeLocal = (await outbox.pendingOutbox(binding))[0].operationId;
+    await storage.savePageDiff('p', { metadata: { title: 'Local mode edit' } });
+    check((await outbox.pendingOutbox(binding))[0].operationId === beforeLocal, 'Local mode queued a cloud upload');
+    localStorage.setItem('onenote_sync_provider', 'turso');
+    useSyncStore.setState({ userId: 'fixture-user', providerType: 'turso' });
+    syncEngine.tursoProvider = { pushPages: async () => {}, pushPageElements: async () => { throw Error('Simulated network failure'); } };
+    check(await syncEngine.flushPendingChanges() === false, 'Failed upload reported success');
+    check((await outbox.pendingOutbox(binding)).length === 1, 'Failed upload erased durable queue');
+    useSyncStore.setState({ userId: null });
+    await syncEngine.flushPendingChanges(); // Clear test retry timer without a network call.
+    return 'Durable queue: atomic save+intent, bounded markers, conditional ack, stale snapshot, account/provider scope, explicit claim, trash/restore and failed send passed.';
+  });
+  console.log(durable);
+  await page.reload();
+  await page.getByRole('button', { name: 'Сохранено на устройстве', exact: true }).waitFor();
+  const reloaded = await page.evaluate(async () => {
+    const { pendingOutbox } = await import('/src/services/sync/outbox.ts');
+    const { getDB } = await import('/src/db/idb.ts');
+    return { entries: (await pendingOutbox({ provider: 'turso', userId: 'fixture-user' })).length, title: (await (await getDB()).get('pages', 'p')).title };
+  });
+  assert.equal(reloaded.entries, 1); assert.equal(reloaded.title, 'Local mode edit');
+  console.log('Reload retained both the local note and its queued operation.');
+
+  if (process.env.NOTES_ROLLBACK_READER) {
+    const source = await readFile(process.env.NOTES_ROLLBACK_READER, 'utf8');
+    const result = await page.evaluate(async source => {
+      const code = source.replace(/from ['"]idb['"]/, `from '${location.origin}/node_modules/.vite/deps/idb.js'`);
+      const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+      try {
+        const reader = await import(url);
+        const db = await reader.getDB();
+        const result = { version: db.version, title: (await db.get('pages', 'p')).title, pending: (await db.getAll('syncOutbox')).length, assets: await db.count('assets') };
+        db.close();
+        return result;
+      } finally { URL.revokeObjectURL(url); }
+    }, source);
+    assert.equal(result.version, 3); assert.equal(result.title, 'Local mode edit');
+    assert.ok(result.pending >= 1); assert.ok(result.assets >= 1);
+    console.log('Rollback compatibility reader opened schema 3 and preserved notes, assets and queued operations.');
+  }
+
+  const secondPage = await context.newPage();
+  await secondPage.goto(`${server.resolvedUrls.local[0]}__local-safety`);
+  await secondPage.getByRole('button', { name: 'Сохранено на устройстве', exact: true }).waitFor();
+  const firstSend = page.evaluate(async () => {
+    const { syncEngine, useSyncStore } = await import('/src/services/sync/syncEngine.ts');
+    localStorage.setItem('fixtureActiveUploads', '0'); localStorage.setItem('fixtureMaxUploads', '0');
+    localStorage.setItem('fixtureSecondMetadata', '0');
+    const gate = new Promise(resolve => { window.releaseUpload = resolve; });
+    syncEngine.tursoProvider = { pullAll: async () => ({ notebooks: [], sections: [], pages: [], elements: [] }), pushPages: async () => {}, pushPageElements: async () => {
+      const active = Number(localStorage.getItem('fixtureActiveUploads')) + 1;
+      localStorage.setItem('fixtureActiveUploads', String(active)); localStorage.setItem('fixtureMaxUploads', String(active));
+      window.firstUploadStarted = true; await gate;
+      localStorage.setItem('fixtureActiveUploads', String(active - 1));
+    } };
+    useSyncStore.setState({ userId: 'fixture-user', providerType: 'turso' });
+    return await syncEngine.flushPendingChanges();
+  });
+  await page.waitForFunction(() => window.firstUploadStarted === true);
+  const secondSend = secondPage.evaluate(async () => {
+    const { syncEngine, useSyncStore } = await import('/src/services/sync/syncEngine.ts');
+    const storage = await import('/src/db/storage.ts');
+    await storage.savePageDiff('p', { metadata: { title: 'Second tab edit' } });
+    syncEngine.tursoProvider = { pushPages: async () => { localStorage.setItem('fixtureSecondMetadata', '1'); }, pushPageElements: async () => {
+      const active = Number(localStorage.getItem('fixtureActiveUploads')) + 1;
+      localStorage.setItem('fixtureMaxUploads', String(Math.max(Number(localStorage.getItem('fixtureMaxUploads')), active)));
+    } };
+    useSyncStore.setState({ userId: 'fixture-user', providerType: 'turso' });
+    window.secondSenderReady = true;
+    return await syncEngine.flushPendingChanges();
+  });
+  await secondPage.waitForFunction(() => window.secondSenderReady === true);
+  assert.equal(await page.evaluate(() => localStorage.getItem('fixtureSecondMetadata')), '0', 'Second tab started before first upload released its lock');
+  await page.evaluate(() => window.releaseUpload());
+  assert.deepEqual(await Promise.all([firstSend, secondSend]), [true, true]);
+  const drained = await page.evaluate(async () => {
+    const { pendingOutbox } = await import('/src/services/sync/outbox.ts');
+    const { getDB } = await import('/src/db/idb.ts');
+    return { pending: (await pendingOutbox({ provider: 'turso', userId: 'fixture-user' })).length, max: Number(localStorage.getItem('fixtureMaxUploads')), title: (await (await getDB()).get('pages', 'p')).title };
+  });
+  assert.equal(drained.pending, 0); assert.equal(drained.max, 1); assert.equal(drained.title, 'Second tab edit');
+  console.log('Two tabs serialized uploads, preserved an edit during the first send, and drained only the acknowledged operation.');
 } finally {
   await browser?.close();
   await server.close();

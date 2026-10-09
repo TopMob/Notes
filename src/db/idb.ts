@@ -2,6 +2,7 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import { Notebook, Section, Page } from '../types/notebook';
 import { Stroke, ShapeObject } from '../types/canvas';
 import { TextBlock } from '../types/textblock';
+import type { OutboxEntry } from '../services/sync/outbox';
 
 export interface ImageAssetRecord {
   id: string;
@@ -15,6 +16,7 @@ export interface ImageAssetRecord {
 }
 
 export interface OneNoteDB extends DBSchema {
+  syncOutbox: { key: string; value: OutboxEntry };
   notebooks: {
     key: string;
     value: Notebook;
@@ -53,14 +55,15 @@ export interface OneNoteDB extends DBSchema {
 }
 
 const DB_NAME = 'onenote_clone_db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBPDatabase<OneNoteDB>> | null = null;
 
 export function getDB(): Promise<IDBPDatabase<OneNoteDB>> {
   if (!dbPromise) {
-    dbPromise = openDB<OneNoteDB>(DB_NAME, DB_VERSION, {
+    const opening = openDB<OneNoteDB>(DB_NAME, DB_VERSION, {
       upgrade(db) {
+        if (!db.objectStoreNames.contains('syncOutbox')) db.createObjectStore('syncOutbox', { keyPath: 'key' });
         // Notebooks
         if (!db.objectStoreNames.contains('notebooks')) {
           const nbStore = db.createObjectStore('notebooks', { keyPath: 'id' });
@@ -105,8 +108,19 @@ export function getDB(): Promise<IDBPDatabase<OneNoteDB>> {
           assetStore.createIndex('by-page', 'pageId');
         }
       },
+      blocking(_currentVersion, _blockedVersion, event) {
+        (event.target as IDBDatabase).close();
+        dbPromise = null;
+      },
+      terminated() { dbPromise = null; },
     });
+    dbPromise = opening;
+    void opening.catch(() => { if (dbPromise === opening) dbPromise = null; });
   }
-  return dbPromise;
+  const connection = dbPromise;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('База ожидает обновления. Закройте другие вкладки Notes и повторите загрузку; заметки не сбрасывались.')), 10000);
+    connection.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
+  });
 }
 

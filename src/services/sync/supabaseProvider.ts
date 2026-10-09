@@ -251,21 +251,21 @@ export class SupabaseProvider implements ISyncProvider {
 
     if (item.notebookIds && item.notebookIds.length > 0) {
       for (const id of item.notebookIds) {
-        await client.from('notebooks').update({ deleted_at: now, updated_at: now }).eq('id', id).eq('user_id', userId);
-        await client.from('sections').update({ deleted_at: now, updated_at: now }).eq('notebook_id', id).eq('user_id', userId);
+        await client.from('notebooks').update({ deleted_at: now, updated_at: now }).eq('id', id).eq('user_id', userId).throwOnError();
+        await client.from('sections').update({ deleted_at: now, updated_at: now }).eq('notebook_id', id).eq('user_id', userId).throwOnError();
       }
     }
 
     if (item.sectionIds && item.sectionIds.length > 0) {
       for (const id of item.sectionIds) {
-        await client.from('sections').update({ deleted_at: now, updated_at: now }).eq('id', id).eq('user_id', userId);
-        await client.from('pages').update({ deleted_at: now, updated_at: now }).eq('section_id', id).eq('user_id', userId);
+        await client.from('sections').update({ deleted_at: now, updated_at: now }).eq('id', id).eq('user_id', userId).throwOnError();
+        await client.from('pages').update({ deleted_at: now, updated_at: now }).eq('section_id', id).eq('user_id', userId).throwOnError();
       }
     }
 
     if (item.pageIds && item.pageIds.length > 0) {
       for (const id of item.pageIds) {
-        await client.from('pages').update({ deleted_at: now, updated_at: now }).eq('id', id).eq('user_id', userId);
+        await client.from('pages').update({ deleted_at: now, updated_at: now }).eq('id', id).eq('user_id', userId).throwOnError();
       }
     }
   }

@@ -212,7 +212,7 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       });
     } catch (error) {
       console.error('Ошибка открытия локальных заметок:', error);
-      set({ isLoading: false, loadError: 'Не удалось открыть заметки на этом устройстве. Попробуйте загрузить их ещё раз. Сброс базы не выполнялся.' });
+      set({ isLoading: false, loadError: error instanceof Error && error.message.startsWith('База ожидает обновления.') ? error.message : 'Не удалось открыть заметки на этом устройстве. Попробуйте загрузить их ещё раз. Сброс базы не выполнялся.' });
     }
   },
 

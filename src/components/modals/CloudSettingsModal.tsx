@@ -15,6 +15,8 @@ import { useUser } from '@clerk/clerk-react';
 import { useSyncStore, syncEngine } from '../../services/sync/syncEngine';
 import { useUiStore } from '../../store/useUiStore';
 import { SyncProviderType } from '../../services/sync/types';
+import { claimUnownedOutbox } from '../../services/sync/outbox';
+import { isSyncOwner } from '../../services/sync/outboxContext';
 
 export const CloudSettingsModal: React.FC = () => {
   const { isCloudSettingsOpen, setCloudSettingsOpen } = useUiStore();
@@ -74,6 +76,19 @@ export const CloudSettingsModal: React.FC = () => {
     } finally {
       setIsManualSyncing(false);
     }
+  };
+
+  const handleClaimDrafts = async () => {
+    const userId = useSyncStore.getState().userId;
+    if (!userId || providerType === 'local' || !isSyncOwner(userId)) return;
+    setIsManualSyncing(true);
+    setSyncSuccessMsg(null);
+    try {
+      await claimUnownedOutbox({ provider: providerType, userId });
+      await syncEngine.syncAll();
+    } catch (error) {
+      useSyncStore.getState().setError(error instanceof Error ? error.message : 'Не удалось отправить локальные правки');
+    } finally { setIsManualSyncing(false); }
   };
 
   return (
@@ -216,6 +231,12 @@ export const CloudSettingsModal: React.FC = () => {
                   <AlertCircle size={14} />
                   <span>{errorMessage}</span>
                 </div>
+              )}
+
+              {errorMessage?.includes('сделанные до входа') && (
+                <button className="btn-sync-now" disabled={isManualSyncing} onClick={handleClaimDrafts}>
+                  Отправить правки до входа в аккаунт {user?.primaryEmailAddress?.emailAddress || user?.username || user?.id}
+                </button>
               )}
 
               {syncSuccessMsg && (

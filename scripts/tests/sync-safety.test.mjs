@@ -16,6 +16,12 @@ globalThis.localStorage = { getItem: () => null, setItem: () => {} };
 const empty = () => ({ notebooks: [], sections: [], pages: [], elements: [] });
 function deferred() { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; }
 function engineFixture(overrides = {}, localTables = {}) {
+  const queued = new Map(); const records = new Map(); let revision = 0;
+  const enqueue = (entity, entityId, record, action = 'put') => {
+    const key = `${entity}:${entityId}`;
+    if (record) records.set(key, record);
+    queued.set(key, { key, entity, entityId, action, userId: 'user', provider: 'turso', sessionId: 'fixture-session', operationId: String(++revision) });
+  };
   const provider = { pushNotebooks: async () => {}, pushSections: async () => {}, pushPages: async () => {}, pushPageElements: async () => {}, deleteItems: async () => {}, pullAll: async () => empty(), ...overrides };
   const canvas = { currentPageId: 'p', saveStatus: 'saved', flushAllSaves: async () => {}, getUnsavedPageIds: () => [], getEditRevision: () => 0 };
   const stats = { notebooks: 0, sections: 0, pages: 0, elements: 0 };
@@ -23,13 +29,30 @@ function engineFixture(overrides = {}, localTables = {}) {
   const api = loadModule('src/services/sync/syncEngine.ts', {
     './tursoProvider': { TursoProvider: class { constructor() { return provider; } } },
     './supabaseProvider': { SupabaseProvider: class { setTokenProvider() {} } },
-    '../../db/idb': { getDB: async () => ({ getAll: async name => localTables[name] || [] }) },
+    '../../db/idb': { getDB: async () => ({ getAll: async name => localTables[name] || [], transaction: () => ({ done: Promise.resolve() }) }) },
     '../../db/storage': { loadPageData: async () => ({ strokes: [], shapes: [], textBlocks: [] }) },
     '../../store/useCanvasStore': { useCanvasStore: { getState: () => canvas, setState() { throw Error('Do not replace active canvas directly'); } } },
     '../../store/useNotebookStore': { useNotebookStore: { getState: () => ({ refreshFromStorage: async () => { refreshes++; } }) } },
     './safePull': { validateCloudPull() {}, applyCloudPull: async () => { applies++; return { pulled: stats, conflicts: new Set() }; } },
+    './outboxContext': { isSyncOwner: () => true, rememberSyncOwner() {} },
+    './outbox': {
+      outboxSessionId: 'fixture-session',
+      pendingOutbox: async binding => [...queued.values()].filter(entry => entry.userId === binding.userId && entry.provider === binding.provider),
+      acknowledgeOutbox: async entry => { if (queued.get(entry.key)?.operationId === entry.operationId) queued.delete(entry.key); },
+      queueLocalChange: async (_tx, entity, id) => enqueue(entity, id, localTables[entity]?.find(row => row.id === id)),
+      readOutboxSnapshot: async entry => {
+        if (queued.get(entry.key)?.operationId !== entry.operationId) return null;
+        const record = records.get(entry.key);
+        return { entry, record, [entry.entity === 'notebooks' ? 'notebook' : entry.entity === 'sections' ? 'section' : 'page']: record, elements: { strokes: [], shapes: [], textBlocks: [] } };
+      },
+    },
   });
-  return { ...api, canvas, counts: () => ({ applies, refreshes }) };
+  const notify = api.syncEngine.notifyChange.bind(api.syncEngine);
+  api.syncEngine.notifyChange = payload => {
+    for (const entity of ['notebooks', 'sections', 'pages']) for (const record of payload[entity] || []) enqueue(entity, record.id, record);
+    notify(payload);
+  };
+  return { ...api, canvas, queued, counts: () => ({ applies, refreshes }) };
 }
 
 test('duplicate full sync requests share one actual operation', async () => {
@@ -46,7 +69,7 @@ test('a failed queued push prevents PULL and retries the original payload', asyn
   const { syncEngine, useSyncStore, counts } = engineFixture({ pushNotebooks: async () => { pushes++; if (failed) throw Error('Network failure'); }, pullAll: async () => { pulls++; return empty(); } });
   syncEngine.notifyChange({ notebooks: [{ id: 'n', title: 'Keep', order: 0, createdAt: 1 }] });
   useSyncStore.setState({ userId: 'user' });
-  await assert.rejects(syncEngine.syncAll(), /Отправка изменений/);
+  await assert.rejects(syncEngine.syncAll(), /Network failure/);
   assert.equal(pulls, 0); assert.equal(counts().applies, 0);
   failed = false; assert.equal(await syncEngine.flushPendingChanges(), true); assert.equal(pushes, 2);
 });
@@ -56,7 +79,7 @@ test('a new cloud page whose content upload fails remains queued for retry', asy
   const { syncEngine, useSyncStore } = engineFixture({ pushPages: async () => { pagePushes++; }, pushPageElements: async () => { elementPushes++; if (failed) throw Error('Content upload failure'); } }, { pages: [{ id: 'p' }] });
   useSyncStore.setState({ userId: 'user' }); await assert.rejects(syncEngine.syncAll(), /Content upload failure/);
   failed = false; assert.equal(await syncEngine.flushPendingChanges(), true);
-  assert.equal(pagePushes, 1); assert.equal(elementPushes, 2);
+  assert.equal(pagePushes, 2); assert.equal(elementPushes, 2);
 });
 
 test('background pushes are serialized even when changes arrive in flight', async () => {
@@ -124,4 +147,39 @@ test('Supabase failure on a later page rejects the entire partial result', async
   const { readSupabaseRows } = loadModule('src/services/sync/supabaseRead.ts'); let calls = 0;
   const client = { from() { return { select() { return this; }, eq() { return this; }, gt() { return this; }, order() { return this; }, limit() { return this; }, then(resolve) { return Promise.resolve(++calls === 1 ? { data: [{ id: 'a' }], error: null } : { data: null, error: Error('Second page failure') }).then(resolve); } }; } };
   await assert.rejects(readSupabaseRows(client, 'pages', 'user', 0), /Second page failure/);
+});
+
+test('remembered local owner remains stable through signout, account and provider changes', () => {
+  const original = globalThis.localStorage; const data = new Map();
+  globalThis.localStorage = { getItem: key => data.get(key) || null, setItem: (key, value) => data.set(key, value) };
+  try {
+    const context = loadModule('src/services/sync/outboxContext.ts');
+    assert.equal(context.getSyncBinding().userId, null);
+    context.rememberSyncOwner('first'); context.rememberSyncOwner(null); context.rememberSyncOwner('second');
+    assert.equal(context.getSyncBinding().userId, 'first'); assert.equal(context.isSyncOwner('second'), false);
+    data.set('onenote_sync_provider', 'supabase'); assert.equal(context.getSyncBinding().provider, 'supabase');
+    data.set('onenote_sync_provider', 'local'); assert.equal(context.getSyncBinding(), null);
+  } finally { globalThis.localStorage = original; }
+});
+
+test('replaying an interrupted session never replaces differing existing cloud content', () => {
+  const { checkOutboxReplay } = loadModule('src/services/sync/replaySafety.ts');
+  const record = { id: 'p', title: 'Local', order: 0, sectionId: 's', camera: { x: 0, y: 0, zoom: 1 }, background: 'plain' };
+  const snapshot = { entry: { entity: 'pages', entityId: 'p', action: 'put' }, record, elements: { strokes: [{ id: 'a', pageId: 'p', color: 'black' }], shapes: [], textBlocks: [] } };
+  const cloud = { ...empty(), pages: [record], elements: [{ id: 'a', pageId: 'p', type: 'stroke', data: { id: 'a', pageId: 'p', color: 'red' } }] };
+  assert.equal(checkOutboxReplay(snapshot, cloud), 'conflict');
+  cloud.elements[0].data.color = 'black'; assert.equal(checkOutboxReplay(snapshot, cloud), 'acknowledged');
+  assert.equal(checkOutboxReplay(snapshot, empty()), 'new');
+  snapshot.entry.action = 'delete'; assert.equal(checkOutboxReplay(snapshot, cloud), 'conflict');
+  cloud.pages[0] = { ...record, deletedAt: 10 }; assert.equal(checkOutboxReplay(snapshot, cloud), 'acknowledged');
+});
+
+test('actual engine pauses restored conflicting work without calling a cloud write', async () => {
+  let pushes = 0;
+  const { syncEngine, useSyncStore, queued } = engineFixture({ pushNotebooks: async () => { pushes++; }, pullAll: async () => ({ ...empty(), notebooks: [{ id: 'n', title: 'Remote', order: 0, createdAt: 1, updatedAt: 10 }] }) });
+  syncEngine.notifyChange({ notebooks: [{ id: 'n', title: 'Local', order: 0, createdAt: 1 }] });
+  queued.values().next().value.sessionId = 'previous-session';
+  useSyncStore.setState({ userId: 'user' });
+  await assert.rejects(syncEngine.syncAll(), /до выбора версии/);
+  assert.equal(pushes, 0); assert.equal(queued.size, 1);
 });

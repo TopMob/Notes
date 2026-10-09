@@ -9,6 +9,8 @@ import { getDB, ImageAssetRecord } from './idb';
 import { syncEngine } from '../services/sync/syncEngine';
 import { assetManager } from '../services/assets/assetManager';
 import { validateLegacyBackup } from './backupValidation';
+import { queueLocalChange, OutboxEntity } from '../services/sync/outbox';
+import { getSyncBinding } from '../services/sync/outboxContext';
 import { Notebook, Section, Page } from '../types/notebook';
 import { Stroke, ShapeObject, Camera, CanvasBackground } from '../types/canvas';
 import { TextBlock } from '../types/textblock';
@@ -17,6 +19,15 @@ import {
   INITIAL_SECTIONS,
   INITIAL_PAGES,
 } from './initialData';
+
+async function persistEntity(entity: OutboxEntity, value: Notebook | Section | Page, sync = true): Promise<void> {
+  const binding = getSyncBinding();
+  const db = await getDB();
+  const tx = db.transaction([entity, 'syncOutbox'], 'readwrite');
+  await tx.objectStore(entity).put(value);
+  if (sync) await queueLocalChange(tx, entity, value.id, value.deletedAt ? 'delete' : 'put', binding);
+  await tx.done;
+}
 
 export async function initStorage(): Promise<void> {
   const db = await getDB();
@@ -105,8 +116,9 @@ export interface PageDiff {
  * Выполняет точечные put и delete без полного сканирования getAllKeys.
  */
 export async function savePageDiff(pageId: string, diff: PageDiff): Promise<void> {
+  const binding = getSyncBinding();
   const db = await getDB();
-  const tx = db.transaction(['sections', 'pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
+  const tx = db.transaction(['sections', 'pages', 'strokes', 'shapes', 'textBlocks', 'syncOutbox'], 'readwrite');
 
   if (diff.strokes) {
     const store = tx.objectStore('strokes');
@@ -164,6 +176,7 @@ export async function savePageDiff(pageId: string, diff: PageDiff): Promise<void
     }
   }
 
+  await queueLocalChange(tx, 'pages', pageId, 'put', binding);
   await tx.done;
 
   syncEngine.notifyChange({
@@ -191,7 +204,7 @@ export async function savePageFull(
   }
 ): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction(['pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
+  const tx = db.transaction(['pages', 'strokes', 'shapes', 'textBlocks', 'syncOutbox'], 'readwrite');
 
   const strokeStore = tx.objectStore('strokes');
   const existingStrokes = await strokeStore.index('by-page').getAllKeys(pageId);
@@ -223,6 +236,7 @@ export async function savePageFull(
     }
   }
 
+  await queueLocalChange(tx, 'pages', pageId);
   await tx.done;
 
   syncEngine.notifyChange({
@@ -238,7 +252,7 @@ export async function savePageFull(
 
 export async function savePageStrokes(pageId: string, strokes: Stroke[]): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction('strokes', 'readwrite');
+  const tx = db.transaction(['strokes', 'syncOutbox'], 'readwrite');
   const store = tx.objectStore('strokes');
 
   const existing = await store.index('by-page').getAllKeys(pageId);
@@ -250,12 +264,14 @@ export async function savePageStrokes(pageId: string, strokes: Stroke[]): Promis
     await store.put(stroke);
   }
 
+  await queueLocalChange(tx, 'pages', pageId);
   await tx.done;
+  syncEngine.notifyChange({ pageElements: { pageId } });
 }
 
 export async function savePageShapes(pageId: string, shapes: ShapeObject[]): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction('shapes', 'readwrite');
+  const tx = db.transaction(['shapes', 'syncOutbox'], 'readwrite');
   const store = tx.objectStore('shapes');
 
   const existing = await store.index('by-page').getAllKeys(pageId);
@@ -267,12 +283,14 @@ export async function savePageShapes(pageId: string, shapes: ShapeObject[]): Pro
     await store.put(shape);
   }
 
+  await queueLocalChange(tx, 'pages', pageId);
   await tx.done;
+  syncEngine.notifyChange({ pageElements: { pageId } });
 }
 
 export async function savePageTextBlocks(pageId: string, textBlocks: TextBlock[]): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction('textBlocks', 'readwrite');
+  const tx = db.transaction(['textBlocks', 'syncOutbox'], 'readwrite');
   const store = tx.objectStore('textBlocks');
 
   const existing = await store.index('by-page').getAllKeys(pageId);
@@ -284,7 +302,9 @@ export async function savePageTextBlocks(pageId: string, textBlocks: TextBlock[]
     await store.put(block);
   }
 
+  await queueLocalChange(tx, 'pages', pageId);
   await tx.done;
+  syncEngine.notifyChange({ pageElements: { pageId } });
 }
 
 export async function updatePageMetadata(
@@ -299,14 +319,14 @@ export async function updatePageMetadata(
       const allSecs = await db.getAll('sections');
       updated.sectionId = allSecs[0]?.id || 'sec-quick-notes';
     }
-    await db.put('pages', updated);
-    syncEngine.notifyChange({ pages: [updated] });
+    const needsSync = Object.keys(updates).some(key => ['title', 'camera', 'background'].includes(key));
+    await persistEntity('pages', updated, needsSync);
+    if (needsSync) syncEngine.notifyChange({ pages: [updated] });
   }
 }
 
 export async function createNotebook(notebook: Notebook): Promise<void> {
-  const db = await getDB();
-  await db.put('notebooks', notebook);
+  await persistEntity('notebooks', notebook);
   syncEngine.notifyChange({ notebooks: [notebook] });
 }
 
@@ -316,7 +336,7 @@ export async function renameNotebook(notebookId: string, title: string): Promise
   if (nb) {
     nb.title = title;
     nb.updatedAt = Date.now();
-    await db.put('notebooks', nb);
+    await persistEntity('notebooks', nb);
     syncEngine.notifyChange({ notebooks: [nb] });
   }
 }
@@ -324,7 +344,7 @@ export async function renameNotebook(notebookId: string, title: string): Promise
 export async function deleteNotebook(notebookId: string): Promise<void> {
   const db = await getDB();
   const now = Date.now();
-  const tx = db.transaction(['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
+  const tx = db.transaction(['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks', 'syncOutbox'], 'readwrite');
   const nb = await tx.objectStore('notebooks').get(notebookId);
   if (nb) {
     nb.deletedAt = now;
@@ -346,6 +366,9 @@ export async function deleteNotebook(notebookId: string): Promise<void> {
       await tx.objectStore('pages').put(p);
     }
   }
+  await queueLocalChange(tx, 'notebooks', notebookId, 'delete');
+  for (const id of secIds) await queueLocalChange(tx, 'sections', id, 'delete');
+  for (const id of pageIds) await queueLocalChange(tx, 'pages', id, 'delete');
   await tx.done;
 
   syncEngine.notifyDelete({
@@ -356,20 +379,18 @@ export async function deleteNotebook(notebookId: string): Promise<void> {
 }
 
 export async function createSection(section: Section): Promise<void> {
-  const db = await getDB();
-  await db.put('sections', section);
+  await persistEntity('sections', section);
   syncEngine.notifyChange({ sections: [section] });
 }
 
 export async function createPage(page: Page): Promise<void> {
-  const db = await getDB();
-  await db.put('pages', page);
+  await persistEntity('pages', page);
   syncEngine.notifyChange({ pages: [page] });
 }
 
 export async function deleteSection(sectionId: string): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction(['sections', 'pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
+  const tx = db.transaction(['sections', 'pages', 'strokes', 'shapes', 'textBlocks', 'syncOutbox'], 'readwrite');
 
   const pages = await tx.objectStore('pages').index('by-section').getAll(sectionId);
   const pageIds = pages.map((p) => p.id);
@@ -384,6 +405,8 @@ export async function deleteSection(sectionId: string): Promise<void> {
   }
 
   await tx.objectStore('sections').delete(sectionId);
+  await queueLocalChange(tx, 'sections', sectionId, 'delete');
+  for (const id of pageIds) await queueLocalChange(tx, 'pages', id, 'delete');
   await tx.done;
 
   syncEngine.notifyDelete({
@@ -394,7 +417,7 @@ export async function deleteSection(sectionId: string): Promise<void> {
 
 export async function deletePage(pageId: string): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction(['pages', 'strokes', 'shapes', 'textBlocks'], 'readwrite');
+  const tx = db.transaction(['pages', 'strokes', 'shapes', 'textBlocks', 'syncOutbox'], 'readwrite');
 
   await tx.objectStore('pages').delete(pageId);
   const strokeKeys = await tx.objectStore('strokes').index('by-page').getAllKeys(pageId);
@@ -404,6 +427,7 @@ export async function deletePage(pageId: string): Promise<void> {
   const tbKeys = await tx.objectStore('textBlocks').index('by-page').getAllKeys(pageId);
   for (const tbk of tbKeys) await tx.objectStore('textBlocks').delete(tbk);
 
+  await queueLocalChange(tx, 'pages', pageId, 'delete');
   await tx.done;
 
   syncEngine.notifyDelete({
@@ -419,7 +443,7 @@ export async function updateSection(
   const sec = await db.get('sections', sectionId);
   if (sec) {
     const updated: Section = { ...sec, ...updates };
-    await db.put('sections', updated);
+    await persistEntity('sections', updated);
     syncEngine.notifyChange({ sections: [updated] });
   }
 }
@@ -427,7 +451,7 @@ export async function updateSection(
 export async function moveToTrashSection(sectionId: string): Promise<void> {
   const db = await getDB();
   const now = Date.now();
-  const tx = db.transaction(['sections', 'pages'], 'readwrite');
+  const tx = db.transaction(['sections', 'pages', 'syncOutbox'], 'readwrite');
   const sec = await tx.objectStore('sections').get(sectionId);
   const pages = await tx.objectStore('pages').index('by-section').getAll(sectionId);
   const pageIds: string[] = [];
@@ -443,6 +467,8 @@ export async function moveToTrashSection(sectionId: string): Promise<void> {
     await tx.objectStore('pages').put(p);
   }
 
+  await queueLocalChange(tx, 'sections', sectionId, 'delete');
+  for (const id of pageIds) await queueLocalChange(tx, 'pages', id, 'delete');
   await tx.done;
 
   syncEngine.notifyDelete({
@@ -453,7 +479,7 @@ export async function moveToTrashSection(sectionId: string): Promise<void> {
 
 export async function restoreSection(sectionId: string): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction(['sections', 'pages'], 'readwrite');
+  const tx = db.transaction(['sections', 'pages', 'syncOutbox'], 'readwrite');
   const sec = await tx.objectStore('sections').get(sectionId);
   const pages = await tx.objectStore('pages').index('by-section').getAll(sectionId);
 
@@ -469,6 +495,8 @@ export async function restoreSection(sectionId: string): Promise<void> {
     await tx.objectStore('pages').put(p);
   }
 
+  if (sec) await queueLocalChange(tx, 'sections', sectionId);
+  for (const page of restoredPages) await queueLocalChange(tx, 'pages', page.id);
   await tx.done;
 
   if (sec) {
@@ -485,7 +513,7 @@ export async function moveToTrashPage(pageId: string): Promise<void> {
   const page = await db.get('pages', pageId);
   if (page) {
     page.deletedAt = now;
-    await db.put('pages', page);
+    await persistEntity('pages', page);
     syncEngine.notifyDelete({
       pageIds: [pageId],
     });
@@ -497,7 +525,7 @@ export async function restorePage(pageId: string): Promise<void> {
   const page = await db.get('pages', pageId);
   if (page) {
     delete page.deletedAt;
-    await db.put('pages', page);
+    await persistEntity('pages', page);
     syncEngine.notifyChange({
       pages: [page],
     });
