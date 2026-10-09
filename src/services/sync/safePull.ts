@@ -2,6 +2,20 @@ import type { IDBPDatabase } from 'idb';
 import type { OneNoteDB } from '../../db/idb';
 import type { CloudPullResult, SyncStats } from './types';
 import { validateLegacyBackup } from '../../db/backupValidation';
+import { putRevision } from './revisionState';
+import type { SyncBinding } from './outboxContext';
+import type { OutboxEntity } from './outbox';
+import { canonicalVersion } from './protocol.mjs';
+import type { ImageAssetRecord } from '../../db/idb';
+
+export interface PullRevisions {
+  binding: SyncBinding;
+  accepted: Set<string>;
+  protected: Set<string>;
+  bases: { entity: OutboxEntity; id: string; hash: string | null; canonical: string; conflict: boolean }[];
+  assets: ImageAssetRecord[];
+  isSnapshotCurrent: (local: any[][]) => boolean;
+}
 
 const stores = ['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'] as const;
 function stable(value: any): string {
@@ -31,9 +45,9 @@ export function validateCloudPull(cloud: CloudPullResult): void {
 }
 
 /** Incoming rows commit together. Absence never means deletion; existing content is retained on conflict. */
-export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPullResult, protectedPageIds: Set<string>, isCurrent: () => boolean = () => true) {
+export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPullResult, protectedPageIds: Set<string>, isCurrent: () => boolean = () => true, revisions?: PullRevisions) {
   validateCloudPull(cloud);
-  const tx = db.transaction([...stores], 'readwrite');
+  const tx = db.transaction([...stores, ...(revisions ? ['syncOutbox', 'assets'] as const : [])], 'readwrite');
   // Attach the rejection handler before a request can abort the transaction.
   const done = tx.done; void done.catch(() => {});
   const pulled: SyncStats['pulled'] = { notebooks: 0, sections: 0, pages: 0, elements: 0 };
@@ -43,6 +57,7 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
     const local = await Promise.all(stores.map(name => tx.objectStore(name).getAll()));
     const checkCurrent = () => { if (!isCurrent()) throw new Error('Во время синхронизации появились новые правки или изменился аккаунт. Локальная загрузка отменена; повторите синхронизацию.'); };
     checkCurrent();
+    if (revisions && !revisions.isSnapshotCurrent(local)) throw new Error('Локальная база изменилась в другой вкладке. Повторите синхронизацию.');
     const maps = Object.fromEntries(stores.map((name, i) => [name, new Map(local[i].map(row => [row.id, row]))])) as Record<typeof stores[number], Map<string, any>>;
     const merged = (name: 'notebooks' | 'sections' | 'pages', remote: any[]) => {
       const rows = new Map(maps[name]);
@@ -71,6 +86,7 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
     }
     // Without a shared base revision, a differing populated page must not be overlaid or replaced.
     for (const [pageId, remote] of remoteContent) {
+      if (revisions?.accepted.has(`pages:${pageId}`)) continue;
       if (protectedPageIds.has(pageId)) continue;
       const existing = localContent.get(pageId);
       if (existing?.size && (existing.size !== remote.size || [...remote].some(([id, data]) => !existing.has(id) || stable(existing.get(id)) !== stable(data)))) {
@@ -79,17 +95,17 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
     }
     const protectedSections = new Set<string>();
     const protectedNotebooks = new Set<string>();
-    for (const page of cloud.pages) if (page.deletedAt && localContent.get(page.id)?.size) {
+    for (const page of cloud.pages) if (page.deletedAt && localContent.get(page.id)?.size && !revisions?.accepted.has(`pages:${page.id}`)) {
       protectedPageIds.add(page.id); conflicts.add(page.id);
     }
     for (const section of cloud.sections) if (section.deletedAt) {
-      for (const page of maps.pages.values()) if (page.sectionId === section.id && localContent.get(page.id)?.size) {
+      for (const page of maps.pages.values()) if (page.sectionId === section.id && localContent.get(page.id)?.size && !revisions?.accepted.has(`pages:${page.id}`)) {
         protectedSections.add(section.id); protectedPageIds.add(page.id); conflicts.add(page.id);
       }
     }
     for (const notebook of cloud.notebooks) if (notebook.deletedAt) {
       for (const section of maps.sections.values()) if (section.notebookId === notebook.id) {
-        for (const page of maps.pages.values()) if (page.sectionId === section.id && localContent.get(page.id)?.size) {
+        for (const page of maps.pages.values()) if (page.sectionId === section.id && localContent.get(page.id)?.size && !revisions?.accepted.has(`pages:${page.id}`)) {
           protectedNotebooks.add(notebook.id); protectedSections.add(section.id); protectedPageIds.add(page.id); conflicts.add(page.id);
         }
       }
@@ -106,9 +122,9 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
         const previous = maps[name].get(row.id);
         if (name === 'sections' && 'notebookId' in row && (!maps.notebooks.has(row.notebookId) || maps.notebooks.get(row.notebookId)?.deletedAt)) continue;
         if (name === 'pages' && 'sectionId' in row && (!maps.sections.has(row.sectionId) || maps.sections.get(row.sectionId)?.deletedAt)) continue;
-        if (name === 'pages' && protectedPageIds.has(row.id)) continue;
+        if (name === 'pages' && protectedPageIds.has(row.id) || revisions?.protected.has(`${name}:${row.id}`)) continue;
         if (row.deletedAt && (name === 'sections' && protectedSections.has(row.id) || name === 'notebooks' && protectedNotebooks.has(row.id))) continue;
-        if (previous && row.updatedAt <= Math.max(previous.updatedAt || 0, previous.deletedAt || 0)) continue;
+        if (previous && row.updatedAt <= Math.max(previous.updatedAt || 0, previous.deletedAt || 0) && !revisions?.accepted.has(`${name}:${row.id}`)) continue;
         // Keep recoverable tombstones instead of physically deleting local metadata.
         if (row.deletedAt && !previous) continue;
         const next = { ...previous, ...row };
@@ -118,6 +134,15 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
         pulled[name]++;
         if (name === 'pages') changedPageIds.add(row.id);
       }
+    }
+    if (revisions) {
+      for (const page of cloud.pages) if (!page.deletedAt && revisions.accepted.has(`pages:${page.id}`) && !protectedPageIds.has(page.id) && maps.pages.has(page.id) && !maps.pages.get(page.id)?.deletedAt) {
+        for (const name of ['strokes', 'shapes', 'textBlocks'] as const) for (const row of maps[name].values()) if (row.pageId === page.id) {
+          await tx.objectStore(name).delete(row.id); maps[name].delete(row.id);
+          changedPageIds.add(page.id);
+        }
+      }
+      for (const asset of revisions.assets) await tx.objectStore('assets').put(asset);
     }
     for (const el of cloud.elements) {
       if (protectedPageIds.has(el.pageId) || !maps.pages.has(el.pageId) || maps.pages.get(el.pageId)?.deletedAt) continue;
@@ -130,6 +155,20 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
       await tx.objectStore(name).put(el.data);
       checkCurrent();
       pulled.elements++; changedPageIds.add(el.pageId);
+    }
+    if (revisions) for (const base of revisions.bases) {
+      if (base.conflict) {
+        conflicts.add(base.id);
+        const previous = await tx.objectStore('syncOutbox').get(JSON.stringify(['state', revisions.binding.provider, revisions.binding.userId, base.entity, base.id]));
+        await putRevision(tx, revisions.binding, base.entity, base.id, previous && 'base' in previous ? previous.base ?? null : null, true);
+      } else {
+        const elements = base.entity === 'pages' ? {
+          strokes: [...maps.strokes.values()].filter(row => row.pageId === base.id),
+          shapes: [...maps.shapes.values()].filter(row => row.pageId === base.id),
+          textBlocks: [...maps.textBlocks.values()].filter(row => row.pageId === base.id),
+        } : undefined;
+        if (canonicalVersion(base.entity, maps[base.entity].get(base.id), elements) === base.canonical) await putRevision(tx, revisions.binding, base.entity, base.id, base.hash);
+      }
     }
     checkCurrent();
     await done;

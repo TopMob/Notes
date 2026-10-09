@@ -3,6 +3,7 @@ import { Notebook, Section, Page } from '../types/notebook';
 import { Stroke, ShapeObject } from '../types/canvas';
 import { TextBlock } from '../types/textblock';
 import type { OutboxEntry } from '../services/sync/outbox';
+import type { RevisionState } from '../services/sync/revisionState';
 
 export interface ImageAssetRecord {
   id: string;
@@ -16,7 +17,7 @@ export interface ImageAssetRecord {
 }
 
 export interface OneNoteDB extends DBSchema {
-  syncOutbox: { key: string; value: OutboxEntry };
+  syncOutbox: { key: string; value: OutboxEntry | RevisionState };
   notebooks: {
     key: string;
     value: Notebook;

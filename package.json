@@ -7,13 +7,14 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types --test scripts/tests/sync-and-history.test.mjs scripts/tests/gestures.test.mjs scripts/tests/slug.test.mjs scripts/tests/routing.test.mjs scripts/tests/shortcuts.test.mjs scripts/tests/math-superscript.test.mjs scripts/tests/table-and-power-fixes.test.mjs scripts/tests/local-safety.test.mjs scripts/tests/sync-safety.test.mjs"
+    "test": "node --experimental-strip-types --test scripts/tests/sync-and-history.test.mjs scripts/tests/gestures.test.mjs scripts/tests/slug.test.mjs scripts/tests/routing.test.mjs scripts/tests/shortcuts.test.mjs scripts/tests/math-superscript.test.mjs scripts/tests/table-and-power-fixes.test.mjs scripts/tests/local-safety.test.mjs scripts/tests/sync-safety.test.mjs scripts/tests/server-sync.test.mjs scripts/tests/supabase-rpc.test.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.9",
     "@libsql/client": "^0.18.0",
     "@supabase/supabase-js": "^2.116.0",
     "idb": "^8.0.2",
+    "jose": "^6.2.12",
     "katex": "^0.16.21",
     "lucide-react": "^0.475.0",
     "perfect-freehand": "^1.2.2",
@@ -22,6 +23,7 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/katex": "^0.16.7",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",

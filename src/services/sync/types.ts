@@ -1,6 +1,7 @@
 import { Notebook, Section, Page } from '../../types/notebook';
 import { Stroke, ShapeObject } from '../../types/canvas';
 import { TextBlock } from '../../types/textblock';
+import type { GuardedOperation } from './revisionState';
 
 export type SyncProviderType = 'local' | 'turso' | 'supabase';
 
@@ -19,6 +20,8 @@ export interface SyncPayload {
 }
 
 export interface CloudPullResult {
+  guarded?: boolean;
+  completePageIds?: string[];
   notebooks: (Notebook & { updatedAt: number; deletedAt?: number | null })[];
   sections: (Section & { updatedAt: number; deletedAt?: number | null })[];
   pages: (Page & { updatedAt: number; deletedAt?: number | null })[];
@@ -48,6 +51,10 @@ export interface SyncStats {
 }
 
 export interface ISyncProvider {
+  guarded?: boolean;
+  commit?(userId: string, operation: GuardedOperation): Promise<{ revision: string | null }>;
+  uploadAsset?(id: string, blob: Blob): Promise<void>;
+  downloadAsset?(id: string): Promise<Blob>;
   name: SyncProviderType;
   pushNotebooks(userId: string, notebooks: Notebook[]): Promise<void>;
   pushSections(userId: string, sections: Section[]): Promise<void>;

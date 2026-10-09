@@ -11,6 +11,12 @@ import { applyCloudPull, validateCloudPull } from './safePull';
 import { acknowledgeOutbox, pendingOutbox, readOutboxSnapshot, queueLocalChange, outboxSessionId } from './outbox';
 import { isSyncOwner, rememberSyncOwner } from './outboxContext';
 import { checkOutboxReplay } from './replaySafety';
+import { getRevision, flagConflict } from './revisionState';
+import { versionHash, cloudElementsFor, assetIds } from './protocol.mjs';
+import type { OutboxEntry } from './outbox';
+import { applyVersionedPull } from './revisionPull';
+import { listConflicts, resolveConflict } from './conflicts';
+import type { OutboxEntity } from './outbox';
 
 interface SyncStoreState {
   providerType: SyncProviderType;
@@ -103,8 +109,9 @@ class SyncEngine {
     }
   }
 
-  public setAuthTokenProvider(provider: AccessTokenProvider | null) {
+  public setAuthTokenProvider(provider: AccessTokenProvider | null, sessionProvider?: AccessTokenProvider | null) {
     this.supabaseProvider.setTokenProvider(provider);
+    this.tursoProvider.setTokenProvider?.(sessionProvider === undefined ? provider : sessionProvider);
   }
 
   private getActiveProvider(): ISyncProvider | null {
@@ -170,6 +177,88 @@ class SyncEngine {
     return this.serialize(() => this.flushPendingChangesNow());
   }
 
+  public async getConflicts() {
+    const { userId, providerType } = useSyncStore.getState();
+    const provider = this.getActiveProvider();
+    if (!userId || !provider || providerType === 'local' || !isSyncOwner(userId)) return [];
+    const result = await listConflicts(await getDB(), { provider: providerType, userId }, provider);
+    if (useSyncStore.getState().userId !== userId || this.getActiveProvider() !== provider) throw new Error('Аккаунт изменился');
+    return result;
+  }
+
+  public async getConflictHistory(): Promise<string[]> {
+    const { userId, providerType } = useSyncStore.getState();
+    if (!userId || providerType === 'local' || !isSyncOwner(userId)) return [];
+    const rows = await (await getDB()).getAll('syncOutbox');
+    if (useSyncStore.getState().userId !== userId || useSyncStore.getState().providerType !== providerType) return [];
+    return rows.filter(row => row.provider === 'state' && row.bindingProvider === providerType && row.userId === userId).flatMap(row => 'alternatives' in row ? (row.alternatives || []).map(version => String(version.record.title || '')) : []);
+  }
+
+  public chooseConflict(entity: OutboxEntity, id: string, choice: 'local' | 'cloud'): Promise<void> {
+    return this.serialize(async () => {
+      const { userId, providerType } = useSyncStore.getState(); const provider = this.getActiveProvider();
+      if (!userId || !provider?.guarded || providerType === 'local' || !isSyncOwner(userId)) throw new Error('Выбор версии доступен для текущего аккаунта облака');
+      await useCanvasStore.getState().flushAllSaves();
+      const edits = useCanvasStore.getState().getEditRevision();
+      const isCurrent = () => useCanvasStore.getState().getEditRevision() === edits && useSyncStore.getState().userId === userId && this.getActiveProvider() === provider;
+      await resolveConflict(await getDB(), { provider: providerType, userId }, provider, entity, id, choice, isCurrent);
+      if (isCurrent()) await useNotebookStore.getState().refreshFromStorage();
+      await this.flushPendingChangesNow();
+    });
+  }
+
+  private async sendGuarded(provider: ISyncProvider, userId: string, entry: OutboxEntry, snapshot: NonNullable<Awaited<ReturnType<typeof readOutboxSnapshot>>>, cloud: import('./types').CloudPullResult, assertContext: () => void): Promise<boolean> {
+    const db = await getDB();
+    const state = await getRevision(db, entry, entry.entity, entry.entityId);
+    const remote = cloud[entry.entity].find(row => row.id === entry.entityId);
+    const remoteElements = entry.entity === 'pages' ? cloudElementsFor(cloud, entry.entityId) : undefined;
+    const actual = await versionHash(entry.entity, remote, remoteElements);
+    const deleting = entry.action === 'delete' || !!snapshot.record?.deletedAt;
+    if (!deleting && !snapshot.record) throw new Error('Объект очереди отсутствует локально; пустая отправка заблокирована');
+    const desiredRecord = deleting ? remote && { ...remote, deletedAt: 1 } : { ...snapshot.record, deletedAt: null };
+    const desired = await versionHash(entry.entity, desiredRecord, snapshot.elements);
+    assertContext();
+    if (!state?.conflict && desired === actual) {
+      if (!deleting && entry.entity === 'pages') await this.uploadPageAssets(db, provider, snapshot.elements || {}, assertContext);
+      await acknowledgeOutbox(entry, actual); return true;
+    }
+    const expected = Object.prototype.hasOwnProperty.call(entry, 'base') ? entry.base : state?.base;
+    if (state?.conflict || expected === undefined && actual !== null || expected !== undefined && expected !== actual) {
+      await flagConflict(db, entry);
+      useSyncStore.getState().setError('Есть разные версии заметок. Обе сохранены; откройте конфликты в настройках синхронизации.');
+      return false;
+    }
+    if (!deleting && entry.entity === 'pages') await this.uploadPageAssets(db, provider, snapshot.elements || {}, assertContext);
+    try {
+      const result = await provider.commit!(userId, { entity: entry.entity, id: entry.entityId, action: deleting ? 'delete' : 'put', expected: expected ?? null, record: snapshot.record, elements: snapshot.elements || undefined });
+      assertContext();
+      await acknowledgeOutbox(entry, result.revision);
+      const rows = cloud[entry.entity] as any[];
+      const next = deleting ? remote && { ...remote, deletedAt: Date.now() } : { ...snapshot.record, deletedAt: null, updatedAt: Date.now() };
+      if (next) { const index = rows.findIndex(row => row.id === entry.entityId); if (index < 0) rows.push(next); else rows[index] = next; }
+      if (entry.entity === 'pages' && !deleting) {
+        cloud.elements = cloud.elements.filter(el => el.pageId !== entry.entityId);
+        for (const [key, type] of [['strokes', 'stroke'], ['shapes', 'shape'], ['textBlocks', 'textBlock']] as const) for (const data of snapshot.elements?.[key] || []) cloud.elements.push({ id: data.id, pageId: entry.entityId, type, data, updatedAt: Date.now() });
+      }
+      return true;
+    } catch (error) {
+      if ((error as Error & { status?: number }).status === 409) {
+        await flagConflict(db, entry);
+        useSyncStore.getState().setError('Облако изменилось во время отправки. Локальные правки сохранены; откройте конфликты в настройках синхронизации.');
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private async uploadPageAssets(db: Awaited<ReturnType<typeof getDB>>, provider: ISyncProvider, elements: Partial<import('./compression').PageElementsBundle>, assertContext: () => void) {
+    for (const id of assetIds(elements)) {
+      const asset = await db.get('assets', id);
+      if (!asset?.blob || !provider.uploadAsset) throw new Error('Оригинал изображения отсутствует на этом устройстве. Отправка страницы приостановлена; другие версии сохранены.');
+      await provider.uploadAsset(id, asset.blob); assertContext();
+    }
+  }
+
   private async flushPendingChangesNow(): Promise<boolean> {
     // Сбрасываем таймеры
     if (this.idleTimer) {
@@ -199,7 +288,7 @@ class SyncEngine {
       const entries = await pendingOutbox(binding);
       if (!entries.length) { this.pendingPageElementIds.clear(); return true; }
       useSyncStore.getState().setStatus('syncing');
-      const restoredCloud = entries.some(entry => entry.sessionId !== outboxSessionId) ? await provider.pullAll(userId) : null;
+      const restoredCloud = provider.guarded || entries.some(entry => entry.sessionId !== outboxSessionId) ? await provider.pullAll(userId) : null;
       if (restoredCloud) validateCloudPull(restoredCloud);
       const assertContext = () => {
         if (useSyncStore.getState().userId !== userId || this.getActiveProvider() !== provider || !isSyncOwner(userId)) throw new Error('Аккаунт или провайдер изменился; очередь сохранена для повтора.');
@@ -210,6 +299,10 @@ class SyncEngine {
         const snapshot = await readOutboxSnapshot(entry);
         if (!snapshot) continue; // A newer operation replaced this entry.
         assertContext();
+        if (provider.guarded && restoredCloud) {
+          if (!await this.sendGuarded(provider, userId, entry, snapshot, restoredCloud, assertContext)) return false;
+          continue;
+        }
         if (restoredCloud && entry.sessionId !== outboxSessionId) {
           const replay = checkOutboxReplay(snapshot, restoredCloud);
           if (replay === 'conflict') {
@@ -294,7 +387,7 @@ class SyncEngine {
       const localPages = await db.getAll('pages');
 
       // 3. Получаем все данные из облака
-      const cloudData = await provider.pullAll(userId);
+      let cloudData = await provider.pullAll(userId);
       validateCloudPull(cloudData);
       if (snapshotRevision !== this.changeRevision || snapshotEdits !== useCanvasStore.getState().getEditRevision()) throw new Error('Во время загрузки облака появились локальные правки. Входящая синхронизация отменена; повторите после сохранения.');
       if (useSyncStore.getState().userId !== userId || this.getActiveProvider() !== provider) throw new Error('Аккаунт или провайдер изменился во время синхронизации');
@@ -307,12 +400,37 @@ class SyncEngine {
       let pushedNotebooks = 0;
       let pushedSections = 0;
       let pushedPages = 0;
+      let pushedElements = 0;
       let pulledNotebooks = 0;
       let pulledSections = 0;
       let pulledPages = 0;
       let pulledElements = 0;
 
       // 4. ЭТАП PUSH: локальные данные -> в облако
+      if (provider.guarded) {
+        const uploaded = new Set<string>();
+        for (const page of localPages) if (!page.deletedAt && cloudPageMap.has(page.id) && provider.uploadAsset) {
+          const data = await loadPageData(page.id);
+          for (const id of assetIds(data)) if (!uploaded.has(id)) {
+            const asset = await db.get('assets', id);
+            if (asset?.blob) { await provider.uploadAsset(id, asset.blob); uploaded.add(id); }
+            if (useSyncStore.getState().userId !== userId || this.getActiveProvider() !== provider) throw new Error('Аккаунт изменился; синхронизация остановлена');
+          }
+        }
+        const tx = db.transaction('syncOutbox', 'readwrite');
+        for (const [entity, rows, remote] of [['notebooks', localNotebooks, cloudNbMap], ['sections', localSections, cloudSecMap], ['pages', localPages, cloudPageMap]] as const) {
+          for (const row of rows) if (!row.deletedAt && !remote.has(row.id)) {
+            await queueLocalChange(tx, entity, row.id);
+            if (entity === 'notebooks') pushedNotebooks++;
+            if (entity === 'sections') pushedSections++;
+            if (entity === 'pages') pushedPages++;
+          }
+        }
+        await tx.done;
+        if (!await this.flushPendingChangesNow()) throw new Error(useSyncStore.getState().errorMessage || 'Очередь сохранена; отправка приостановлена');
+        cloudData = await provider.pullAll(userId);
+        validateCloudPull(cloudData);
+      } else {
       // А) Блокноты
       const nbsToPush: Notebook[] = [];
       for (const nb of localNotebooks) {
@@ -370,7 +488,6 @@ class SyncEngine {
       }
 
       // Г) Элементы страниц (штрихи, рисунки, фигуры, текст)
-      let pushedElements = 0;
       for (const pg of localPages) {
         if (pg.deletedAt) continue;
         const pageData = await loadPageData(pg.id);
@@ -398,15 +515,17 @@ class SyncEngine {
           pageIds: pageIdsToDeleteInCloud,
         });
       }
+      }
 
       if (snapshotRevision !== this.changeRevision || snapshotEdits !== useCanvasStore.getState().getEditRevision()) throw new Error('Локальные заметки изменились во время отправки. Загрузка облака приостановлена.');
       const pending = await pendingOutbox({ provider: useSyncStore.getState().providerType as 'turso' | 'supabase', userId });
       const protectedPageIds = new Set([...pushedPageIds, ...pending.filter(entry => entry.entity === 'pages').map(entry => entry.entityId), ...useCanvasStore.getState().getUnsavedPageIds()]);
       const editRevision = useCanvasStore.getState().getEditRevision();
       const changeRevision = this.changeRevision;
-      const result = await applyCloudPull(db, cloudData, protectedPageIds, () =>
+      const isCurrent = () =>
         useCanvasStore.getState().getEditRevision() === editRevision && this.changeRevision === changeRevision &&
-        useSyncStore.getState().userId === userId && this.getActiveProvider() === provider);
+        useSyncStore.getState().userId === userId && this.getActiveProvider() === provider;
+      const result = provider.guarded ? await applyVersionedPull(db, cloudData, provider, { provider: provider.name as 'turso' | 'supabase', userId }, protectedPageIds, isCurrent) : await applyCloudPull(db, cloudData, protectedPageIds, isCurrent);
       ({ notebooks: pulledNotebooks, sections: pulledSections, pages: pulledPages, elements: pulledElements } = result.pulled);
 
       // 6. Обновление UI хранилища

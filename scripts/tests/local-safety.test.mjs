@@ -14,6 +14,7 @@ function loadModule(filename, boundaries = {}, cache = new Map()) {
   const js = ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } }).outputText;
   const localRequire = name => {
     if (Object.hasOwn(boundaries, name)) return boundaries[name];
+    if (name.endsWith('.mjs')) return require(resolve(dirname(path), name));
     if (name.startsWith('.')) return loadModule(resolve(dirname(path), `${name}.ts`), boundaries, cache);
     return require(name);
   };

@@ -3,6 +3,8 @@ import type { OneNoteDB } from '../../db/idb';
 import type { IDBPTransaction } from 'idb';
 import { getSyncBinding } from './outboxContext';
 import type { SyncBinding } from './outboxContext';
+import { revisionKey, putRevision } from './revisionState';
+import type { RevisionState } from './revisionState';
 
 export type OutboxEntity = 'notebooks' | 'sections' | 'pages';
 export const outboxSessionId = crypto.randomUUID();
@@ -14,6 +16,7 @@ export interface OutboxEntry extends SyncBinding {
   operationId: string;
   sessionId: string;
   createdAt: number;
+  base?: string | null;
 }
 type WriteTransaction = IDBPTransaction<OneNoteDB, any, 'readwrite'>;
 
@@ -22,7 +25,10 @@ export async function queueLocalChange(tx: WriteTransaction, entity: OutboxEntit
   void tx.done.catch(() => {});
   try {
     const key = JSON.stringify([binding.provider, binding.userId, entity, entityId]);
-    await tx.objectStore('syncOutbox').put({ ...binding, key, entity, entityId, action, operationId: crypto.randomUUID(), sessionId: outboxSessionId, createdAt: Date.now() });
+    const previous = await tx.objectStore('syncOutbox').get(key) as OutboxEntry | undefined;
+    const state = await tx.objectStore('syncOutbox').get(revisionKey(binding, entity, entityId)) as RevisionState | undefined;
+    const base = previous && Object.prototype.hasOwnProperty.call(previous, 'base') ? previous.base : state?.base;
+    await tx.objectStore('syncOutbox').put({ ...binding, key, entity, entityId, action, operationId: crypto.randomUUID(), sessionId: outboxSessionId, createdAt: Date.now(), ...(base !== undefined ? { base } : {}) });
   } catch (error) {
     try { tx.abort(); } catch { /* Already aborted. */ }
     throw error;
@@ -32,13 +38,17 @@ export async function queueLocalChange(tx: WriteTransaction, entity: OutboxEntit
 export async function pendingOutbox(binding: SyncBinding): Promise<OutboxEntry[]> {
   const db = await getDB();
   const all = await db.getAll('syncOutbox');
-  return all.filter(row => row.provider === binding.provider && row.userId === binding.userId);
+  return all.filter((row): row is OutboxEntry => row.provider === binding.provider && row.userId === binding.userId);
 }
 
-export async function acknowledgeOutbox(entry: OutboxEntry): Promise<void> {
+export async function acknowledgeOutbox(entry: OutboxEntry, revision?: string | null): Promise<void> {
   const db = await getDB();
   const tx = db.transaction('syncOutbox', 'readwrite');
-  const current = await tx.store.get(entry.key);
+  const current = await tx.store.get(entry.key) as OutboxEntry | undefined;
+  if (revision !== undefined) {
+    await putRevision(tx, entry, entry.entity, entry.entityId, revision);
+    if (current && current.operationId !== entry.operationId && current.base === entry.base) await tx.store.put({ ...current, base: revision });
+  }
   if (current?.operationId === entry.operationId) await tx.store.delete(entry.key);
   await tx.done;
 }
@@ -47,7 +57,7 @@ export async function acknowledgeOutbox(entry: OutboxEntry): Promise<void> {
 export async function readOutboxSnapshot(entry: OutboxEntry) {
   const db = await getDB();
   const tx = db.transaction(['syncOutbox', 'notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'], 'readonly');
-  const current = await tx.objectStore('syncOutbox').get(entry.key);
+  const current = await tx.objectStore('syncOutbox').get(entry.key) as OutboxEntry | undefined;
   if (!current || current.operationId !== entry.operationId) { await tx.done; return null; }
   const record = await tx.objectStore(entry.entity).get(entry.entityId);
   const page = entry.entity === 'pages' ? record as OneNoteDB['pages']['value'] | undefined : undefined;

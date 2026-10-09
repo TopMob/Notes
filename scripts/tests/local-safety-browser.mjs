@@ -9,6 +9,22 @@ const { chromium } = createRequire(import.meta.url)(process.env.NOTES_PLAYWRIGHT
 const server = await createServer({ server: { host: '127.0.0.1', port: 0 }, plugins: [{
   name: 'local-safety-fixture',
   configureServer(vite) {
+    vite.middlewares.use('/__sync-conflicts', async (_request, response) => {
+      response.setHeader('Content-Type', 'text/html; charset=utf-8');
+      response.end(await vite.transformIndexHtml('/__sync-conflicts', `<!doctype html><meta charset="utf-8"><div id="root"></div><script type="module">
+        import React from 'react'; import { createRoot } from 'react-dom/client';
+        import '/src/styles/tokens.css'; import '/src/styles/reset.css'; import '/src/styles/app.css'; import '/src/styles/sync-auth.css';
+        import { CloudSettingsModal } from '/src/components/modals/CloudSettingsModal.tsx';
+        import { useUiStore } from '/src/store/useUiStore.ts';
+        import { syncEngine, useSyncStore } from '/src/services/sync/syncEngine.ts';
+        let rows = [{entity:'pages',id:'ui_fixture',localTitle:'Лекция — локальная версия',cloudTitle:'Лекция — версия ноутбука',localCount:12,cloudCount:14}];
+        syncEngine.getConflicts = async () => rows;
+        syncEngine.chooseConflict = async (entity,id,choice) => { window.fixtureChoice = choice; rows = []; useSyncStore.getState().setError(null); };
+        useSyncStore.setState({providerType:'turso',userId:'fixture-user',status:'error',errorMessage:'Есть разные версии заметок.'});
+        useUiStore.setState({isCloudSettingsOpen:true});
+        createRoot(document.getElementById('root')).render(React.createElement(CloudSettingsModal));
+      </script>`));
+    });
     vite.middlewares.use('/__local-safety', async (_request, response) => {
       response.setHeader('Content-Type', 'text/html; charset=utf-8');
       response.end(await vite.transformIndexHtml('/__local-safety', `<!doctype html><meta charset="utf-8"><title>Local save fixture</title><div id="root"></div>
@@ -265,6 +281,90 @@ try {
   });
   assert.equal(drained.pending, 0); assert.equal(drained.max, 1); assert.equal(drained.title, 'Second tab edit');
   console.log('Two tabs serialized uploads, preserved an edit during the first send, and drained only the acknowledged operation.');
+  const versioned = await page.evaluate(async () => {
+    const { getDB } = await import('/src/db/idb.ts');
+    const { applyVersionedPull } = await import('/src/services/sync/revisionPull.ts');
+    const { putRevision, getRevision } = await import('/src/services/sync/revisionState.ts');
+    const { versionHash, cloudElementsFor } = await import('/src/services/sync/protocol.mjs');
+    const { listConflicts, resolveConflict } = await import('/src/services/sync/conflicts.ts');
+    const { syncEngine, useSyncStore } = await import('/src/services/sync/syncEngine.ts');
+    const storage = await import('/src/db/storage.ts?outbox-test');
+    const { pendingOutbox } = await import('/src/services/sync/outbox.ts');
+    const check = (ok, message) => { if (!ok) throw Error(message); };
+    const db = await getDB(); const binding = { provider: 'turso', userId: 'fixture-user' };
+    useSyncStore.setState({ userId: null });
+    const local = await db.get('pages', 'p');
+    const section = await db.get('sections', local.sectionId); const notebook = await db.get('notebooks', section.notebookId);
+    const data = await storage.loadPageData('p');
+    const initialHash = await versionHash('pages', local, data);
+    const baseTx = db.transaction('syncOutbox', 'readwrite');
+    await putRevision(baseTx, binding, 'pages', 'p', initialHash);
+    await baseTx.done;
+    let cloud = { notebooks: [notebook], sections: [section], pages: [{ ...local, title: 'Other device erased the last object', updatedAt: 1 }], elements: [], guarded: true, completePageIds: ['p'] };
+    const provider = { name: 'turso', guarded: true, pullAll: async () => cloud };
+    await applyVersionedPull(db, cloud, provider, binding, new Set(), () => true);
+    check((await db.get('pages', 'p')).title === cloud.pages[0].title, 'Clean remote metadata did not replace local clock');
+    check((await storage.loadPageData('p')).strokes.length === 0, 'Last erased cloud object resurrected');
+    check((await db.get('pages', 'p')).slugAliases.includes('old-link'), 'Versioned pull lost aliases');
+    const baseline = (await getRevision(db, binding, 'pages', 'p')).base;
+    const realStroke = { id: 'versioned_stroke', pageId: 'p', points: [{ x: 1, y: 2 }], color: 'blue', baseWidth: 3, opacity: 1, tool: 'pen', bounds: { minX: 1, minY: 2, maxX: 1, maxY: 2 }, createdAt: 1 };
+    await storage.savePageDiff('p', { metadata: { title: 'Local device edit' }, strokes: { put: [realStroke] } });
+    cloud = { ...cloud, pages: [{ ...cloud.pages[0], title: 'Cloud device edit', updatedAt: 100000 }], elements: [{ id: realStroke.id, pageId: 'p', type: 'stroke', data: { ...realStroke, color: 'red' }, updatedAt: 100000 }] };
+    await applyVersionedPull(db, cloud, provider, binding, new Set(['p']), () => true);
+    check((await db.get('pages', 'p')).title === 'Local device edit', 'Conflicting pull replaced local title');
+    check((await db.get('strokes', realStroke.id)).color === 'blue', 'Conflicting pull overlaid strokes');
+    check((await pendingOutbox(binding)).find(row => row.entityId === 'p').base === baseline, 'Edit did not capture its base revision');
+    check((await listConflicts(db, binding, provider)).some(row => row.id === 'p'), 'Conflict not exposed to the picker');
+    const beforeChoice = (await db.getAll('pages')).length;
+    await resolveConflict(db, binding, provider, 'pages', 'p', 'local', () => true);
+    check((await db.getAll('pages')).length === beforeChoice + 1, 'Other version was not archived separately');
+    const archive = (await db.getAll('pages')).find(row => row.id.startsWith('conflict_p_'));
+    check((await storage.loadPageData(archive.id)).strokes[0].color === 'red', 'Archived cloud version lost content');
+    await resolveConflict(db, binding, provider, 'pages', 'p', 'local', () => true);
+    check((await db.getAll('pages')).length === beforeChoice + 1, 'Repeated conflict resolution duplicated its archive');
+    const currentBase = await versionHash('pages', cloud.pages[0], cloudElementsFor(cloud, 'p'));
+    check((await pendingOutbox(binding)).find(row => row.entityId === 'p').base === currentBase, 'Explicit choice did not update expected revision');
+    // Real engine + durable ack: sending reads persisted data, then records its confirmed base.
+    provider.commit = async (_user, operation) => ({ revision: await versionHash(operation.entity, operation.record, operation.elements) });
+    syncEngine.tursoProvider = provider;
+    useSyncStore.setState({ userId: 'fixture-user', providerType: 'turso' });
+    check(await syncEngine.flushPendingChanges(), 'Guarded engine did not drain resolved work');
+    check((await pendingOutbox(binding)).length === 0, 'Resolved queue did not drain');
+    useSyncStore.setState({ userId: null });
+    await syncEngine.flushPendingChanges();
+    const localNow = await db.get('pages', 'p');
+    const dataNow = await storage.loadPageData('p');
+    cloud = { ...cloud, pages: [{ ...localNow, deletedAt: 100001, updatedAt: 100001 }], elements: dataNow.strokes.map(data => ({ id: data.id, pageId: 'p', type: 'stroke', data, updatedAt: 100001 })) };
+    await applyVersionedPull(db, cloud, provider, binding, new Set(), () => true);
+    check((await db.get('pages', 'p')).deletedAt === 100001, 'Clean remote deletion was not accepted');
+    check((await storage.loadPageData('p')).strokes[0].color === 'blue', 'Deletion erased recoverable trash contents');
+    cloud.pages[0] = { ...cloud.pages[0], deletedAt: null, updatedAt: 100002 };
+    await applyVersionedPull(db, cloud, provider, binding, new Set(), () => true);
+    check(!(await db.get('pages', 'p')).deletedAt, 'Revision-aware restore was not accepted');
+    await storage.renameNotebook(notebook.id, 'Local notebook rename');
+    cloud.notebooks[0] = { ...notebook, title: 'Cloud notebook rename', updatedAt: 200000 };
+    await applyVersionedPull(db, cloud, provider, binding, new Set(), () => true);
+    check((await db.get('notebooks', notebook.id)).title === 'Local notebook rename', 'Metadata conflict was overwritten');
+    await resolveConflict(db, binding, provider, 'notebooks', notebook.id, 'cloud', () => true);
+    check((await db.get('notebooks', notebook.id)).title === 'Cloud notebook rename', 'Metadata choice was not applied');
+    check((await getRevision(db, binding, 'notebooks', notebook.id)).alternatives.some(row => row.record.title === 'Local notebook rename'), 'Other metadata variant was lost');
+    const beforeIncomplete = (await storage.loadPageData('p')).strokes.length;
+    await applyVersionedPull(db, { ...cloud, pages: [{ ...cloud.pages[0], title: 'Incomplete legacy result' }], elements: [], completePageIds: [] }, provider, binding, new Set(), () => true);
+    check((await storage.loadPageData('p')).strokes.length === beforeIncomplete, 'Absent bundle was mistaken for an intentional empty canvas');
+    return 'Versioned pull accepted clean remote edits and empty canvases; concurrent edits stayed separate; picker archived once and actual guarded sender drained the chosen version.';
+  });
+  console.log(versioned);
+  const uiPage = await context.newPage();
+  await uiPage.route('**/node_modules/.vite/deps/@clerk_clerk-react.js*', route => route.fulfill({ contentType: 'application/javascript', body: 'export function useUser(){return {isSignedIn:true,user:{id:"fixture-user",fullName:"Тестовый профиль"}}}' }));
+  await uiPage.goto(`${server.resolvedUrls.local[0]}__sync-conflicts`);
+  await uiPage.getByRole('heading', { name: 'Разные версии заметок' }).waitFor();
+  await uiPage.getByRole('button', { name: 'Работать с облачной', exact: true }).scrollIntoViewIfNeeded();
+  assert.equal(await uiPage.getByRole('button', { name: 'Работать с локальной', exact: true }).isEnabled(), true);
+  if (process.env.NOTES_UI_SCREENSHOT) await uiPage.screenshot({ path: process.env.NOTES_UI_SCREENSHOT });
+  await uiPage.getByRole('button', { name: 'Работать с облачной', exact: true }).click();
+  assert.equal(await uiPage.evaluate(() => window.fixtureChoice), 'cloud');
+  await uiPage.getByRole('heading', { name: 'Разные версии заметок' }).waitFor({ state: 'hidden' });
+  console.log('Conflict picker UI displayed both summaries and resolved the selected version without reporting a false sync success.');
 } finally {
   await browser?.close();
   await server.close();

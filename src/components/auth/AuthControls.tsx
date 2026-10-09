@@ -16,7 +16,6 @@ export const AuthControls: React.FC = () => {
   useEffect(() => {
     if (isLoaded) {
       const currentUserId = isSignedIn && user ? user.id : null;
-      setUser(currentUserId);
 
       if (isSignedIn) {
         // Подключаем мост авторизации Clerk -> Supabase с авто-обновлением токена
@@ -33,10 +32,12 @@ export const AuthControls: React.FC = () => {
           } catch {
             return null;
           }
-        });
+        }, () => getToken());
       } else {
         syncEngine.setAuthTokenProvider(null);
       }
+
+      setUser(currentUserId);
 
       // При первом входе автоматически запускаем синхронизацию
       if (currentUserId && providerType !== 'local') {

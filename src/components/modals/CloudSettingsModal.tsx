@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   HardDrive,
@@ -17,6 +17,7 @@ import { useUiStore } from '../../store/useUiStore';
 import { SyncProviderType } from '../../services/sync/types';
 import { claimUnownedOutbox } from '../../services/sync/outbox';
 import { isSyncOwner } from '../../services/sync/outboxContext';
+import type { ConflictSummary } from '../../services/sync/conflicts';
 
 export const CloudSettingsModal: React.FC = () => {
   const { isCloudSettingsOpen, setCloudSettingsOpen } = useUiStore();
@@ -24,6 +25,15 @@ export const CloudSettingsModal: React.FC = () => {
   const { isSignedIn, user } = useUser();
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [syncSuccessMsg, setSyncSuccessMsg] = useState<string | null>(null);
+  const [conflicts, setConflicts] = useState<ConflictSummary[]>([]);
+  const [conflictError, setConflictError] = useState<string | null>(null);
+  const [conflictHistory, setConflictHistory] = useState<string[]>([]);
+  useEffect(() => {
+    let current = true;
+    setConflicts([]); setConflictError(null); setConflictHistory([]);
+    if (isCloudSettingsOpen && providerType !== 'local' && isSignedIn) void Promise.all([syncEngine.getConflicts(), syncEngine.getConflictHistory()]).then(([rows, history]) => { if (current) { setConflicts(rows); setConflictHistory(history); } }).catch(() => { if (current) setConflictError('Не удалось прочитать облачные версии. Повторите синхронизацию после восстановления связи.'); });
+    return () => { current = false; };
+  }, [isCloudSettingsOpen, providerType, isSignedIn, user?.id, errorMessage]);
 
   if (!isCloudSettingsOpen) return null;
 
@@ -89,6 +99,16 @@ export const CloudSettingsModal: React.FC = () => {
     } catch (error) {
       useSyncStore.getState().setError(error instanceof Error ? error.message : 'Не удалось отправить локальные правки');
     } finally { setIsManualSyncing(false); }
+  };
+
+  const handleConflict = async (item: ConflictSummary, choice: 'local' | 'cloud') => {
+    setIsManualSyncing(true); setConflictError(null); setSyncSuccessMsg(null);
+    try {
+      await syncEngine.chooseConflict(item.entity, item.id, choice);
+      setConflicts(await syncEngine.getConflicts());
+      setConflictHistory(await syncEngine.getConflictHistory());
+    } catch (error) { setConflictError(error instanceof Error ? error.message : 'Не удалось выбрать версию'); }
+    finally { setIsManualSyncing(false); }
   };
 
   return (
@@ -238,6 +258,22 @@ export const CloudSettingsModal: React.FC = () => {
                   Отправить правки до входа в аккаунт {user?.primaryEmailAddress?.emailAddress || user?.username || user?.id}
                 </button>
               )}
+
+              {conflictError && <div className="sync-error-banner"><AlertCircle size={14} /><span>{conflictError}</span></div>}
+              {conflicts.length > 0 && <div className="sync-conflicts">
+                <h3>Разные версии заметок</h3>
+                <p>Выберите рабочую версию. Второй вариант страницы сохранится отдельной копией в её разделе; рисунки не смешиваются.</p>
+                {conflicts.map(item => <div className="sync-conflict-card" key={`${item.entity}:${item.id}`}>
+                  <div><strong>На устройстве:</strong> {item.localTitle}{item.entity === 'pages' && ` · объектов: ${item.localCount}`}</div>
+                  <div><strong>В облаке:</strong> {item.cloudTitle}{item.entity === 'pages' && ` · объектов: ${item.cloudCount}`}</div>
+                  {item.entity !== 'pages' && <p>Название второго варианта сохранится в истории синхронизации этого устройства.</p>}
+                  <div className="sync-conflict-actions">
+                    <button className="btn-secondary" disabled={isManualSyncing} onClick={() => handleConflict(item, 'local')}>Работать с локальной</button>
+                    <button className="btn-secondary" disabled={isManualSyncing} onClick={() => handleConflict(item, 'cloud')}>Работать с облачной</button>
+                  </div>
+                </div>)}
+              </div>}
+              {conflictHistory.length > 0 && <details><summary>Сохранённые варианты названий</summary><ul>{conflictHistory.map((title, index) => <li key={index}>{title}</li>)}</ul></details>}
 
               {syncSuccessMsg && (
                 <div className="sync-success-banner">

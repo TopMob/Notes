@@ -689,11 +689,13 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       if (!activeSec || !sections.some((s) => s.id === activeSec?.id)) {
         activeSec = sections[0] || null;
       }
+      else activeSec = sections.find(s => s.id === activeSec?.id) || null;
       if (activeSec) {
         pages = await loadPages(activeSec.id);
         if (!activePg || !pages.some((p) => p.id === activePg?.id)) {
           activePg = pages[0] || null;
         }
+        else activePg = pages.find(p => p.id === activePg?.id) || null;
       }
     }
 

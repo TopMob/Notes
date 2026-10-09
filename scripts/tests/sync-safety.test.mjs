@@ -9,7 +9,7 @@ function loadModule(filename, boundaries = {}, cache = new Map()) {
   const path = resolve(filename); if (cache.has(path)) return cache.get(path).exports;
   const module = { exports: {} }; cache.set(path, module);
   const js = ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } }).outputText;
-  const localRequire = name => Object.hasOwn(boundaries, name) ? boundaries[name] : name.startsWith('.') ? loadModule(resolve(dirname(path), `${name}.ts`), boundaries, cache) : require(name);
+  const localRequire = name => Object.hasOwn(boundaries, name) ? boundaries[name] : name.endsWith('.mjs') ? require(resolve(dirname(path), name)) : name.startsWith('.') ? loadModule(resolve(dirname(path), `${name}.ts`), boundaries, cache) : require(name);
   Function('require', 'module', 'exports', js)(localRequire, module, module.exports); return module.exports;
 }
 globalThis.localStorage = { getItem: () => null, setItem: () => {} };

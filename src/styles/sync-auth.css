@@ -411,3 +411,15 @@
     transform: rotate(360deg);
   }
 }
+
+.sync-conflicts { margin-top: 16px; }
+.cloud-modal-content { max-height: 90vh; display: flex; flex-direction: column; }
+.cloud-modal-content .modal-body { overflow-y: auto; min-height: 0; }
+.cloud-modal-content .modal-header, .cloud-modal-content .modal-footer { flex-shrink: 0; }
+.sync-conflicts h3 { font-size: 15px; margin: 0 0 8px; }
+.sync-conflicts p { color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+.sync-conflict-card { border: 1px solid var(--hairline); border-radius: 8px; padding: 12px; margin: 10px 0; overflow-wrap: anywhere; }
+.sync-conflict-card > div { margin: 5px 0; }
+.sync-conflict-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sync-conflict-actions button { padding: 8px 10px; border: 1px solid var(--hairline); border-radius: 6px; background: var(--bg-card, white); color: inherit; cursor: pointer; }
+.sync-conflict-actions button:disabled { opacity: .5; cursor: wait; }

@@ -1,266 +1,71 @@
-import { createClient, Client } from '@libsql/client/web';
-import { ISyncProvider, CloudPullResult } from './types';
-import { Notebook, Section, Page } from '../../types/notebook';
-import { Stroke, ShapeObject } from '../../types/canvas';
-import { TextBlock } from '../../types/textblock';
-import { compressBatch } from './compression';
-import { decodeCloudElements } from './cloudElements';
+import type { ISyncProvider, CloudPullResult } from './types';
+import type { Notebook, Section, Page } from '../../types/notebook';
+import type { PageElementsBundle } from './compression';
+import { compressJson, decompressJson } from './compression';
+import type { AccessTokenProvider } from './supabaseProvider';
+import type { GuardedOperation } from './revisionState';
 
-/**
- * TursoProvider — реализация облачной синхронизации на базе Turso (libSQL/SQLite).
- *
- * МОДЕЛЬ БЕЗОПАСНОСТИ И ИЗОЛЯЦИИ ДАННЫХ:
- * SQLite и протокол libSQL/HRANA не предоставляют встроенного механизма Row Level Security (RLS)
- * на уровне движка базы данных. Вся изоляция данных между пользователями является прикладной
- * (application-level / organizational security):
- * 1. Во ВСЕХ запросах (SELECT, INSERT, UPDATE, DELETE) фильтр `WHERE user_id = ?` и значение
- *    колонки `user_id` строго привязываются к авторизованному `currentUserId` через параметризованные args.
- * 2. Клиентский токен Turso (VITE_TURSO_AUTH_TOKEN) доступен посетителю в опубликованном JS.
- * 3. Фильтры ниже не являются границей безопасности: владелец токена может обращаться к БД напрямую.
- *    Для реальной изоляции требуется серверная авторизация и отказ от общего токена в браузере.
- */
 export class TursoProvider implements ISyncProvider {
   name: 'turso' = 'turso';
-  private client: Client | null = null;
-
-  constructor() {
-    const url = import.meta.env.VITE_TURSO_DATABASE_URL || '';
-    const authToken = import.meta.env.VITE_TURSO_AUTH_TOKEN || '';
-
-    if (url && authToken) {
-      this.client = createClient({ url, authToken });
-    }
-  }
-
-  private getClient(): Client {
-    if (!this.client) {
-      throw new Error('Turso client is not initialized. Check your VITE_TURSO_DATABASE_URL and VITE_TURSO_AUTH_TOKEN in .env');
-    }
-    return this.client;
-  }
-
-  async pushNotebooks(userId: string, notebooks: Notebook[]): Promise<void> {
-    const client = this.getClient();
-    const now = Date.now();
-    for (const nb of notebooks) {
-      await client.execute({
-        sql: `
-          INSERT INTO notebooks (id, user_id, title, created_at, updated_at, "order", deleted_at)
-          VALUES (?, ?, ?, ?, ?, ?, NULL)
-          ON CONFLICT(id) DO UPDATE SET
-            title = excluded.title,
-            updated_at = excluded.updated_at,
-            "order" = excluded."order",
-            deleted_at = NULL;
-        `,
-        args: [nb.id, userId, nb.title, nb.createdAt, now, nb.order],
-      });
-    }
-  }
-
-  async pushSections(userId: string, sections: Section[]): Promise<void> {
-    const client = this.getClient();
-    const now = Date.now();
-    for (const sec of sections) {
-      await client.execute({
-        sql: `
-          INSERT INTO sections (id, user_id, notebook_id, title, color, "order", updated_at, deleted_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
-          ON CONFLICT(id) DO UPDATE SET
-            title = excluded.title,
-            color = excluded.color,
-            "order" = excluded."order",
-            updated_at = excluded.updated_at,
-            deleted_at = NULL;
-        `,
-        args: [sec.id, userId, sec.notebookId, sec.title, sec.color, sec.order, now],
-      });
-    }
-  }
-
-  async pushPages(userId: string, pages: Page[]): Promise<void> {
-    const client = this.getClient();
-    const now = Date.now();
-    for (const page of pages) {
-      let secId = page.sectionId;
-      if (!secId) {
-        try {
-          const res = await client.execute({
-            sql: 'SELECT section_id FROM pages WHERE id = ? LIMIT 1',
-            args: [page.id],
-          });
-          if (res.rows[0]?.section_id) {
-            secId = String(res.rows[0].section_id);
-          } else {
-            const secRes = await client.execute({
-              sql: 'SELECT id FROM sections WHERE user_id = ? LIMIT 1',
-              args: [userId],
-            });
-            secId = secRes.rows[0]?.id ? String(secRes.rows[0].id) : 'sec-quick-notes';
-          }
-        } catch {
-          secId = 'sec-quick-notes';
-        }
+  guarded = true;
+  private tokenProvider: AccessTokenProvider | null = null;
+  setTokenProvider(provider: AccessTokenProvider | null) { this.tokenProvider = provider; }
+  private async request(body?: unknown, options: RequestInit = {}, query = ''): Promise<Response> {
+    const token = await this.tokenProvider?.();
+    if (!token) throw new Error('Войдите в аккаунт для синхронизации');
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 45000);
+    try {
+      const incoming = await fetch(`/api/sync${query}`, { method: body ? 'POST' : 'GET', ...options, headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...options.headers, Authorization: `Bearer ${token}` }, body: body ? JSON.stringify(body) : options.body, signal: controller.signal });
+      // Keep the timeout until the body arrives, so a stalled stream cannot hold every tab's lock.
+      const response = new Response(options.method === 'HEAD' ? null : await incoming.arrayBuffer(), { status: incoming.status, statusText: incoming.statusText, headers: incoming.headers });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        const error = new Error(data?.error || 'Сервер синхронизации недоступен; локальные заметки сохранены') as Error & { status: number };
+        error.status = response.status; throw error;
       }
-
-      await client.execute({
-        sql: `
-          INSERT INTO pages (id, user_id, section_id, title, created_at, updated_at, "order", camera, background, deleted_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-          ON CONFLICT(id) DO UPDATE SET
-            title = excluded.title,
-            "order" = excluded."order",
-            camera = excluded.camera,
-            background = excluded.background,
-            updated_at = excluded.updated_at,
-            deleted_at = NULL;
-        `,
-        args: [
-          page.id,
-          userId,
-          secId,
-          page.title || 'Новая страница',
-          page.createdAt || now,
-          now,
-          page.order ?? 0,
-          JSON.stringify(page.camera || {}),
-          JSON.stringify(page.background || {}),
-        ],
-      });
-    }
+      return response;
+    } finally { clearTimeout(timer); }
   }
-
-  /**
-   * Пакетное сохранение элементов страницы в Turso.
-   * Все штрихи, фигуры и текстовые блоки страницы упаковываются в единый сжатый бандл (schema_version = 2),
-   * что сокращает число сетевых запросов и SQL-операций в разы.
-   */
-  async pushPageElements(
-    userId: string,
-    pageId: string,
-    elements: {
-      strokes?: Stroke[];
-      shapes?: ShapeObject[];
-      textBlocks?: TextBlock[];
-    }
-  ): Promise<void> {
-    const client = this.getClient();
-    const now = Date.now();
-
-    const compressedBatch = await compressBatch(elements);
-
-    await client.execute({
-      sql: `
-        INSERT INTO page_elements (id, user_id, page_id, type, data, updated_at, deleted_at)
-        VALUES (?, ?, ?, 'bundle', ?, ?, NULL)
-        ON CONFLICT(id) DO UPDATE SET
-          data = excluded.data,
-          updated_at = excluded.updated_at,
-          deleted_at = NULL;
-      `,
-      args: [`bundle_${pageId}`, userId, pageId, compressedBatch, now],
-    });
+  async pullAll(_userId: string): Promise<CloudPullResult> {
+    const response = await (await this.request({ action: 'pull' })).json();
+    if (typeof response.payload !== 'string') throw new Error('Неполный ответ сервера синхронизации');
+    return decompressJson<CloudPullResult>(response.payload);
   }
-
-  async pullAll(userId: string, since: number = 0): Promise<CloudPullResult> {
-    const client = this.getClient();
-
-    const [nbRes, secRes, pageRes, elRes] = await client.batch([
-      {
-        sql: `SELECT id, title, created_at, updated_at, "order", deleted_at FROM notebooks WHERE user_id = ? AND (? = 0 OR updated_at > ?)`,
-        args: [userId, since, since],
-      },
-      {
-        sql: `SELECT id, notebook_id, title, color, "order", updated_at, deleted_at FROM sections WHERE user_id = ? AND (? = 0 OR updated_at > ?)`,
-        args: [userId, since, since],
-      },
-      {
-        sql: `SELECT id, section_id, title, created_at, updated_at, "order", camera, background, deleted_at FROM pages WHERE user_id = ? AND (? = 0 OR updated_at > ?)`,
-        args: [userId, since, since],
-      },
-      {
-        sql: `SELECT id, page_id, type, data, updated_at, deleted_at FROM page_elements WHERE user_id = ? AND (? = 0 OR updated_at > ?)`,
-        args: [userId, since, since],
-      },
-    ], 'read');
-
-    const parsedElements = await decodeCloudElements(elRes.rows as unknown as Record<string, any>[]);
-
-    return {
-      notebooks: nbRes.rows.map((r: any) => ({
-        id: String(r.id),
-        title: String(r.title),
-        createdAt: Number(r.created_at),
-        updatedAt: Number(r.updated_at),
-        order: Number(r.order),
-        deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
-      })),
-      sections: secRes.rows.map((r: any) => ({
-        id: String(r.id),
-        notebookId: String(r.notebook_id),
-        title: String(r.title),
-        color: String(r.color),
-        order: Number(r.order),
-        updatedAt: Number(r.updated_at),
-        deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
-      })),
-      pages: pageRes.rows.map((r: any) => ({
-        id: String(r.id),
-        sectionId: String(r.section_id),
-        title: String(r.title),
-        createdAt: Number(r.created_at),
-        updatedAt: Number(r.updated_at),
-        order: Number(r.order),
-        camera: r.camera ? JSON.parse(r.camera) : { x: 0, y: 0, zoom: 1 },
-        background: r.background ? JSON.parse(r.background) : 'grid-small',
-        deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
-      })),
-      elements: parsedElements,
-    };
+  async commit(_userId: string, operation: GuardedOperation): Promise<{ revision: string | null }> { return (await this.request({ action: 'commit', payload: await compressJson(operation) })).json(); }
+  async uploadAsset(id: string, blob: Blob): Promise<void> {
+    const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
+    const hash = [...bytes].map(n => n.toString(16).padStart(2, '0')).join('');
+    try {
+      const existing = await this.request(undefined, { method: 'HEAD' }, `?${new URLSearchParams({ id })}`);
+      if (existing.headers.get('X-Asset-Hash') === hash) return;
+      throw new Error('Облачный ID изображения занят другим содержимым');
+    } catch (error) { if ((error as Error & { status?: number }).status !== 404) throw error; }
+    const chunk = 512 * 1024, total = Math.max(1, Math.ceil(blob.size / chunk));
+    if (total > 128) throw new Error('Изображение превышает 64 МБ. Оригинал сохранён локально; облачная отправка приостановлена.');
+    for (let part = 0; part < total; part++) await this.request(undefined, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'X-Asset-Mime': blob.type || 'image/png' }, body: blob.slice(part * chunk, (part + 1) * chunk) }, `?${new URLSearchParams({ id, part: String(part), total: String(total), hash })}`);
   }
-
-  async deleteItems(userId: string, item: { notebookIds?: string[]; sectionIds?: string[]; pageIds?: string[] }): Promise<void> {
-    const client = this.getClient();
-    const now = Date.now();
-    const stmts: { sql: string; args: any[] }[] = [];
-
-    if (item.notebookIds && item.notebookIds.length > 0) {
-      for (const id of item.notebookIds) {
-        stmts.push({
-          sql: `UPDATE notebooks SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
-          args: [now, now, id, userId],
-        });
-        stmts.push({
-          sql: `UPDATE sections SET deleted_at = ?, updated_at = ? WHERE notebook_id = ? AND user_id = ?`,
-          args: [now, now, id, userId],
-        });
-      }
+  async downloadAsset(id: string): Promise<Blob> {
+    const manifest = await this.request(undefined, { method: 'HEAD' }, `?${new URLSearchParams({ id })}`);
+    const total = Number(manifest.headers.get('X-Asset-Parts'));
+    const expectedSize = Number(manifest.headers.get('X-Asset-Size'));
+    const expectedHash = manifest.headers.get('X-Asset-Hash');
+    if (!Number.isInteger(total) || total < 1 || total > 128 || !Number.isFinite(expectedSize) || expectedSize > 64 * 1024 * 1024) throw new Error('Некорректный manifest изображения');
+    const chunks: Blob[] = [];
+    for (let part = 0; part < total; part++) {
+      const response = await this.request(undefined, {}, `?${new URLSearchParams({ id, part: String(part) })}`);
+      if (response.headers.get('X-Asset-Hash') !== expectedHash || Number(response.headers.get('X-Asset-Parts')) !== total) throw new Error('Версия изображения изменилась во время загрузки');
+      const chunk = await response.blob();
+      if (chunk.size > 512 * 1024) throw new Error('Часть изображения превышает допустимый размер');
+      chunks.push(chunk);
     }
-
-    if (item.sectionIds && item.sectionIds.length > 0) {
-      for (const id of item.sectionIds) {
-        stmts.push({
-          sql: `UPDATE sections SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
-          args: [now, now, id, userId],
-        });
-        stmts.push({
-          sql: `UPDATE pages SET deleted_at = ?, updated_at = ? WHERE section_id = ? AND user_id = ?`,
-          args: [now, now, id, userId],
-        });
-      }
-    }
-
-    if (item.pageIds && item.pageIds.length > 0) {
-      for (const id of item.pageIds) {
-        stmts.push({
-          sql: `UPDATE pages SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
-          args: [now, now, id, userId],
-        });
-      }
-    }
-
-    if (stmts.length > 0) {
-      await client.batch(stmts, 'write');
-    }
+    const blob = new Blob(chunks, { type: manifest.headers.get('Content-Type') || 'image/png' });
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))].map(n => n.toString(16).padStart(2, '0')).join('');
+    if (hash !== expectedHash || blob.size !== expectedSize) throw new Error('Контрольная сумма изображения не совпала; загрузка отменена');
+    return blob;
   }
+  async pushNotebooks(_userId: string, _rows: Notebook[]): Promise<void> { throw new Error('Отправка требует базовую ревизию'); }
+  async pushSections(_userId: string, _rows: Section[]): Promise<void> { throw new Error('Отправка требует базовую ревизию'); }
+  async pushPages(_userId: string, _rows: Page[]): Promise<void> { throw new Error('Отправка требует базовую ревизию'); }
+  async pushPageElements(_userId: string, _id: string, _elements: Partial<PageElementsBundle>): Promise<void> { throw new Error('Отправка требует базовую ревизию'); }
+  async deleteItems(_userId: string, _item: { notebookIds?: string[]; sectionIds?: string[]; pageIds?: string[] }): Promise<void> { throw new Error('Удаление требует базовую ревизию'); }
 }
