@@ -7,7 +7,7 @@ import { Viewport } from '../../canvas/engine/Viewport';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
 import { convertPowersToSuperscript, handlePowerKeyDown } from '../../utils/mathText';
-import { assetManager } from '../../services/assets/assetManager';
+import { assetManager, ASSET_READY_EVENT } from '../../services/assets/assetManager';
 
 interface TextBlockViewProps {
   block: TextBlock;
@@ -136,20 +136,27 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   // Автоматическая гидратация живых ObjectURL для изображений при загрузке или смене контента
   useEffect(() => {
     if (!contentRef.current) return;
-    const imgs = contentRef.current.querySelectorAll<HTMLImageElement>('img[data-asset-id]');
-    imgs.forEach(async (img) => {
-      const assetId = img.getAttribute('data-asset-id');
-      if (!assetId) return;
-      const cachedUrl = assetManager.getUrl(assetId);
-      if (cachedUrl && img.src !== cachedUrl) {
-        img.src = cachedUrl;
-      } else if (!cachedUrl) {
-        const loadedUrl = await assetManager.getOrLoadUrl(assetId);
-        if (loadedUrl && img.src !== loadedUrl) {
-          img.src = loadedUrl;
+    const hydrate = (readyId?: string) => {
+      if (!contentRef.current) return;
+      const imgs = contentRef.current.querySelectorAll<HTMLImageElement>('img[data-asset-id]');
+      imgs.forEach(async (img) => {
+        const assetId = img.getAttribute('data-asset-id');
+        if (!assetId || readyId && assetId !== readyId) return;
+        const cachedUrl = assetManager.getUrl(assetId);
+        if (cachedUrl && img.src !== cachedUrl) {
+          img.src = cachedUrl;
+        } else if (!cachedUrl) {
+          const loadedUrl = await assetManager.getOrLoadUrl(assetId);
+          if (loadedUrl && img.isConnected && img.getAttribute('data-asset-id') === assetId && img.src !== loadedUrl) {
+            img.src = loadedUrl;
+          }
         }
-      }
-    });
+      });
+    };
+    hydrate();
+    const onReady = (event: Event) => hydrate((event as CustomEvent<string>).detail);
+    window.addEventListener(ASSET_READY_EVENT, onReady);
+    return () => window.removeEventListener(ASSET_READY_EVENT, onReady);
   }, [block.contentHTML]);
 
   // Перетаскивание блока за верхний хендл (только ЛКМ)

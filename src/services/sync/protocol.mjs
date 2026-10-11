@@ -14,10 +14,11 @@ export function assetIds(elements) {
   for (const row of elements?.textBlocks || []) for (const match of String(row.contentHTML || '').matchAll(/\bdata-asset-id\s*=\s*["']([^"']+)["']/gi)) ids.add(match[1]);
   return [...ids];
 }
+const byId = (a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 export function canonicalVersion(entity, record, elements) {
   if (!record) {
     const portable = portableElements(elements);
-    if (entity === 'pages' && Object.values(portable).some(rows => rows.length)) return stable({ orphan: true, elements: Object.fromEntries(Object.entries(portable).map(([key, rows]) => [key, [...rows].sort((a,b) => a.id.localeCompare(b.id))])) });
+    if (entity === 'pages' && Object.values(portable).some(rows => rows.length)) return stable({ orphan: true, elements: Object.fromEntries(Object.entries(portable).map(([key, rows]) => [key, [...rows].sort(byId)])) });
     return 'absent';
   }
   const fields = entity === 'notebooks' ? ['id', 'title', 'order', 'createdAt'] : entity === 'sections' ? ['id', 'title', 'color', 'order', 'notebookId'] : ['id', 'title', 'order', 'sectionId', 'createdAt', 'camera', 'background'];
@@ -25,7 +26,7 @@ export function canonicalVersion(entity, record, elements) {
   value.deleted = !!record.deletedAt;
   if (entity === 'pages' && !value.deleted) {
     const portable = portableElements(elements);
-    value.elements = Object.fromEntries(Object.entries(portable).map(([key, rows]) => [key, [...rows].sort((a, b) => a.id.localeCompare(b.id))]));
+    value.elements = Object.fromEntries(Object.entries(portable).map(([key, rows]) => [key, [...rows].sort(byId)]));
   }
   return stable(value);
 }

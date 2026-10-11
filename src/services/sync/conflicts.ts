@@ -8,6 +8,7 @@ import type { SyncBinding } from './outboxContext';
 import type { ISyncProvider } from './types';
 import { validateCloudPull } from './safePull';
 import { cloudElementsFor, canonicalVersion, versionHash, assetIds } from './protocol.mjs';
+import { assetManager } from '../assets/assetManager';
 
 export interface ConflictSummary { entity: OutboxEntity; id: string; localTitle: string; cloudTitle: string; localCount: number; cloudCount: number }
 async function localSnapshot(db: IDBPDatabase<OneNoteDB>, entity: OutboxEntity, id: string) {
@@ -99,5 +100,6 @@ export async function resolveConflict(db: IDBPDatabase<OneNoteDB>, binding: Sync
     }
     if (!isCurrent()) throw new Error('Появились новые правки; выбор версии отменён');
     await tx.done;
+    if (isCurrent()) for (const asset of assets) assetManager.registerAsset(asset.id, asset.blob);
   } catch (error) { try { tx.abort(); } catch {} await tx.done.catch(() => {}); throw error; }
 }

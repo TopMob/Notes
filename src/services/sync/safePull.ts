@@ -12,6 +12,7 @@ export interface PullRevisions {
   binding: SyncBinding;
   accepted: Set<string>;
   protected: Set<string>;
+  unchanged: Set<string>;
   bases: { entity: OutboxEntity; id: string; hash: string | null; canonical: string; conflict: boolean }[];
   assets: ImageAssetRecord[];
   isSnapshotCurrent: (local: any[][]) => boolean;
@@ -120,6 +121,7 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
     for (const [name, remote] of [['notebooks', cloud.notebooks], ['sections', cloud.sections], ['pages', cloud.pages]] as const) {
       for (const row of remote) {
         const previous = maps[name].get(row.id);
+        if (revisions?.unchanged.has(`${name}:${row.id}`)) continue;
         if (name === 'sections' && 'notebookId' in row && (!maps.notebooks.has(row.notebookId) || maps.notebooks.get(row.notebookId)?.deletedAt)) continue;
         if (name === 'pages' && 'sectionId' in row && (!maps.sections.has(row.sectionId) || maps.sections.get(row.sectionId)?.deletedAt)) continue;
         if (name === 'pages' && protectedPageIds.has(row.id) || revisions?.protected.has(`${name}:${row.id}`)) continue;
@@ -145,6 +147,7 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
       for (const asset of revisions.assets) await tx.objectStore('assets').put(asset);
     }
     for (const el of cloud.elements) {
+      if (revisions?.unchanged.has(`pages:${el.pageId}`)) continue;
       if (protectedPageIds.has(el.pageId) || !maps.pages.has(el.pageId) || maps.pages.get(el.pageId)?.deletedAt) continue;
       const name = tableFor[el.type];
       const previous = maps[name].get(el.id);

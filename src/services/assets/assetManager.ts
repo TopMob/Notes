@@ -1,5 +1,6 @@
 import { getDB } from '../../db/idb';
 import { compressImageForUpload, CompressedImageResult } from './imageCompression';
+export const ASSET_READY_EVENT = 'notes-asset-ready';
 
 class AssetManager {
   private urlCache = new Map<string, string>();
@@ -15,6 +16,7 @@ class AssetManager {
     if (!url) {
       url = URL.createObjectURL(blob);
       this.urlCache.set(id, url);
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(ASSET_READY_EVENT, { detail: id }));
     }
     this.blobCache.set(id, blob);
     return url;

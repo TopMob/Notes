@@ -341,6 +341,8 @@ try {
     cloud.pages[0] = { ...cloud.pages[0], deletedAt: null, updatedAt: 100002 };
     await applyVersionedPull(db, cloud, provider, binding, new Set(), () => true);
     check(!(await db.get('pages', 'p')).deletedAt, 'Revision-aware restore was not accepted');
+    const identical = await applyVersionedPull(db, cloud, provider, binding, new Set(), () => true);
+    check(identical.changedPageIds.size === 0 && Object.values(identical.pulled).every(count => count === 0), 'Identical cloud snapshot rewrote the canvas and would reset undo');
     await storage.renameNotebook(notebook.id, 'Local notebook rename');
     cloud.notebooks[0] = { ...notebook, title: 'Cloud notebook rename', updatedAt: 200000 };
     await applyVersionedPull(db, cloud, provider, binding, new Set(), () => true);
@@ -354,6 +356,26 @@ try {
     return 'Versioned pull accepted clean remote edits and empty canvases; concurrent edits stayed separate; picker archived once and actual guarded sender drained the chosen version.';
   });
   console.log(versioned);
+  await page.evaluate(async () => {
+    const React = (await import('/node_modules/.vite/deps/react.js')).default;
+    const client = await import('/node_modules/.vite/deps/react-dom_client.js');
+    const createRoot = client.createRoot || client.default.createRoot;
+    const { TextBlockView } = await import('/src/components/text/TextBlockView.tsx');
+    const holder = document.createElement('div'); holder.id = 'late-asset-fixture'; document.body.append(holder);
+    window.fixtureImageRoot = createRoot(holder);
+    window.fixtureImageRoot.render(React.createElement(TextBlockView, { block: { id: 'late-text', pageId: 'p', x: 0, y: 0, width: 100, zIndex: 0, contentHTML: '<img data-asset-id="late-image" width="1" height="1">' }, camera: { x: 0, y: 0, zoom: 1 }, viewportSize: { width: 1280, height: 720 }, isActive: false, onSelect() {} }));
+  });
+  await page.locator('img[data-asset-id="late-image"]').waitFor({ state: 'attached' });
+  await page.evaluate(async () => {
+    const { assetManager } = await import('/src/services/assets/assetManager.ts');
+    const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1;
+    canvas.getContext('2d').fillRect(0, 0, 1, 1);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    assetManager.registerAsset('late-image', blob);
+  });
+  await page.waitForFunction(() => document.querySelector('img[data-asset-id="late-image"]')?.naturalWidth === 1);
+  await page.evaluate(() => { window.fixtureImageRoot.unmount(); document.getElementById('late-asset-fixture').remove(); });
+  console.log('An image arriving after its text block hydrated immediately without reopening or rewriting the canvas.');
   const uiPage = await context.newPage();
   await uiPage.route('**/node_modules/.vite/deps/@clerk_clerk-react.js*', route => route.fulfill({ contentType: 'application/javascript', body: 'export function useUser(){return {isSignedIn:true,user:{id:"fixture-user",fullName:"Тестовый профиль"}}}' }));
   await uiPage.goto(`${server.resolvedUrls.local[0]}__sync-conflicts`);
