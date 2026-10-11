@@ -173,6 +173,10 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
         if (canonicalVersion(base.entity, maps[base.entity].get(base.id), elements) === base.canonical) await putRevision(tx, revisions.binding, base.entity, base.id, base.hash);
       }
     }
+    if (revisions) for (const id of conflicts) {
+      const previous = await tx.objectStore('syncOutbox').get(JSON.stringify(['state', revisions.binding.provider, revisions.binding.userId, 'pages', id]));
+      await putRevision(tx, revisions.binding, 'pages', id, previous && 'base' in previous ? previous.base ?? null : null, true);
+    }
     checkCurrent();
     await done;
     return { pulled, changedPageIds, conflicts };
