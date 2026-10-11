@@ -8,6 +8,7 @@ import { useCanvasStore } from '../../store/useCanvasStore';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
 import { convertPowersToSuperscript, handlePowerKeyDown } from '../../utils/mathText';
 import { assetManager, ASSET_READY_EVENT } from '../../services/assets/assetManager';
+import { escapeHtml } from '../../utils/html';
 
 interface TextBlockViewProps {
   block: TextBlock;
@@ -566,7 +567,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       if (!savedAsset) return;
       const { id: assetId, url } = savedAsset;
 
-      const imgHtml = `<div class="image-wrapper"><img src="${url}" data-asset-id="${assetId}" alt="${imageFile.name || 'Изображение'}" style="max-width: 100%; border-radius: 6px; display: block; margin: 6px 0;" /></div><p><br></p>`;
+      const imgHtml = `<div class="image-wrapper"><img src="${url}" data-asset-id="${escapeHtml(assetId)}" alt="${escapeHtml(imageFile.name || 'Изображение')}" style="max-width: 100%; border-radius: 6px; display: block; margin: 6px 0;" /></div><p><br></p>`;
 
       try {
         const success = document.execCommand('insertHTML', false, imgHtml);
@@ -594,7 +595,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
     const plain = e.clipboardData.getData('text/plain');
     if (plain && plain.includes('^')) {
       e.preventDefault();
-      const converted = convertPowersToSuperscript(plain);
+      const converted = convertPowersToSuperscript(escapeHtml(plain));
       document.execCommand('insertHTML', false, converted);
       if (contentRef.current) {
         lastHtmlRef.current = contentRef.current.innerHTML;
@@ -617,7 +618,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         ).catch(error => { alert(error.message); return null; });
         if (!savedAsset) return;
         const { id: assetId, url } = savedAsset;
-        const imgHtml = `<div class="image-wrapper"><img src="${url}" data-asset-id="${assetId}" alt="${file.name || 'Изображение'}" style="max-width: 100%; border-radius: 6px; display: block; margin: 6px 0;" /></div><p><br></p>`;
+        const imgHtml = `<div class="image-wrapper"><img src="${url}" data-asset-id="${escapeHtml(assetId)}" alt="${escapeHtml(file.name || 'Изображение')}" style="max-width: 100%; border-radius: 6px; display: block; margin: 6px 0;" /></div><p><br></p>`;
 
         try {
           const success = document.execCommand('insertHTML', false, imgHtml);

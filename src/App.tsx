@@ -16,6 +16,7 @@ import { ConfirmDeleteModal } from './components/modals/ConfirmDeleteModal';
 import { TrashModal } from './components/modals/TrashModal';
 import './styles/app.css';
 import { useCanvasStore } from './store/useCanvasStore';
+import { CLERK_PUBLISHABLE_KEY } from './config/clerk';
 
 export const App: React.FC = () => {
   const { init, isLoading, loadError } = useNotebookStore();
@@ -99,7 +100,7 @@ export const App: React.FC = () => {
       <SearchModal />
       <ExportModal />
       <SettingsModal />
-      <CloudSettingsModal />
+      {CLERK_PUBLISHABLE_KEY && <CloudSettingsModal />}
       <CreateSectionModal />
       <ConfirmDeleteModal />
       <TrashModal />

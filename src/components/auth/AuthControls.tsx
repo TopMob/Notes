@@ -7,8 +7,19 @@ import {
 } from '@clerk/clerk-react';
 import { LogIn } from 'lucide-react';
 import { useSyncStore, syncEngine } from '../../services/sync/syncEngine';
+import { CLERK_PUBLISHABLE_KEY } from '../../config/clerk';
 
 export const AuthControls: React.FC = () => {
+  if (!CLERK_PUBLISHABLE_KEY) {
+    return <div className="auth-placeholder" title="Clerk не настроен; заметки сохраняются локально">
+      <span className="auth-error-text">Локальный режим</span>
+    </div>;
+  }
+
+  return <ClerkAuthControls />;
+};
+
+const ClerkAuthControls: React.FC = () => {
   const { isLoaded, isSignedIn, user } = useUser();
   const { getToken } = useAuth();
   const { setUser, providerType } = useSyncStore();
