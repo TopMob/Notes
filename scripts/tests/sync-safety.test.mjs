@@ -183,3 +183,31 @@ test('actual engine pauses restored conflicting work without calling a cloud wri
   await assert.rejects(syncEngine.syncAll(), /до выбора версии/);
   assert.equal(pushes, 0); assert.equal(queued.size, 1);
 });
+
+test('camera-only viewport updates do not enter sync outbox or notify syncEngine', async () => {
+  let notified = 0;
+  const queued = [];
+  const fakeTx = {
+    objectStore: () => ({
+      get: async () => ({ id: 'p', sectionId: 's', title: 'Page', camera: { x: 0, y: 0, zoom: 1 } }),
+      put: async () => {},
+    }),
+    done: Promise.resolve(),
+  };
+  const storage = loadModule('src/db/storage.ts', {
+    './idb': { getDB: async () => ({ transaction: () => fakeTx, get: async () => ({ id: 'p', sectionId: 's', title: 'Page', camera: { x: 0, y: 0, zoom: 1 } }) }) },
+    '../services/sync/outbox': { queueLocalChange: async () => { queued.push('queued'); }, getSyncBinding: () => ({ provider: 'turso', userId: 'u' }) },
+    '../services/sync/outboxContext': { getSyncBinding: () => ({ provider: 'turso', userId: 'u' }) },
+    '../services/sync/syncEngine': { syncEngine: { notifyChange: () => { notified++; } } },
+  });
+
+  await storage.savePageDiff('p', { metadata: { camera: { x: 100, y: 200, zoom: 1.5 } } });
+  assert.equal(queued.length, 0);
+  assert.equal(notified, 0);
+
+  // Content edits (strokes) must queue and notify
+  await storage.savePageDiff('p', { strokes: { put: [{ id: 's1', pageId: 'p' }] } });
+  assert.equal(queued.length, 1);
+  assert.equal(notified, 1);
+});
+

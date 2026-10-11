@@ -176,18 +176,29 @@ export async function savePageDiff(pageId: string, diff: PageDiff): Promise<void
     }
   }
 
-  await queueLocalChange(tx, 'pages', pageId, 'put', binding);
+  const hasCloudChanges = Boolean(
+    (diff.strokes && ((diff.strokes.put && diff.strokes.put.length > 0) || (diff.strokes.deleteIds && diff.strokes.deleteIds.length > 0))) ||
+    (diff.shapes && ((diff.shapes.put && diff.shapes.put.length > 0) || (diff.shapes.deleteIds && diff.shapes.deleteIds.length > 0))) ||
+    (diff.textBlocks && ((diff.textBlocks.put && diff.textBlocks.put.length > 0) || (diff.textBlocks.deleteIds && diff.textBlocks.deleteIds.length > 0))) ||
+    (diff.metadata && Object.keys(diff.metadata).some(key => key !== 'camera'))
+  );
+
+  if (hasCloudChanges) {
+    await queueLocalChange(tx, 'pages', pageId, 'put', binding);
+  }
   await tx.done;
 
-  syncEngine.notifyChange({
-    pageElements: {
-      pageId,
-      strokes: diff.strokes?.put,
-      shapes: diff.shapes?.put,
-      textBlocks: diff.textBlocks?.put,
-    },
-    pages: fullUpdatedPage ? [fullUpdatedPage] : undefined,
-  });
+  if (hasCloudChanges) {
+    syncEngine.notifyChange({
+      pageElements: {
+        pageId,
+        strokes: diff.strokes?.put,
+        shapes: diff.shapes?.put,
+        textBlocks: diff.textBlocks?.put,
+      },
+      pages: fullUpdatedPage ? [fullUpdatedPage] : undefined,
+    });
+  }
 }
 
 /**
@@ -319,7 +330,7 @@ export async function updatePageMetadata(
       const allSecs = await db.getAll('sections');
       updated.sectionId = allSecs[0]?.id || 'sec-quick-notes';
     }
-    const needsSync = Object.keys(updates).some(key => ['title', 'camera', 'background'].includes(key));
+    const needsSync = Object.keys(updates).some(key => ['title', 'background'].includes(key));
     await persistEntity('pages', updated, needsSync);
     if (needsSync) syncEngine.notifyChange({ pages: [updated] });
   }

@@ -88,8 +88,8 @@ class SyncEngine {
   private maxWaitTimer: any = null;
   private retryTimer: any = null;
   private retryDelay = 2000;
-  private readonly IDLE_DELAY = 3000; // 3 секунды тишины для автосохранения
-  private readonly MAX_WAIT = 15000;  // 15 секунд непрерывной работы
+  private readonly IDLE_DELAY = 60000; // 60 секунд (1 минута) тишины для автосохранения
+  private readonly MAX_WAIT = 180000;  // 3 минуты непрерывной работы
   private pendingPageElementIds = new Set<string>();
 
   constructor() {
