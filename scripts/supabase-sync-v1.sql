@@ -108,7 +108,6 @@ GRANT EXECUTE ON FUNCTION public.notes_commit_v1(text,text,text,jsonb,jsonb,json
 REVOKE INSERT,UPDATE,DELETE ON public.notebooks,public.sections,public.pages,public.page_elements FROM authenticated,anon;
 REVOKE SELECT ON public.notebooks,public.sections,public.pages,public.page_elements FROM anon;
 GRANT SELECT ON public.notebooks,public.sections,public.pages,public.page_elements TO authenticated;
-COMMIT;
 
 -- Storage setup (Supabase only, not part of the isolated PostgreSQL schema test).
 INSERT INTO storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
@@ -118,3 +117,4 @@ DROP POLICY IF EXISTS notes_asset_files_read ON storage.objects;
 DROP POLICY IF EXISTS notes_asset_files_insert ON storage.objects;
 CREATE POLICY notes_asset_files_read ON storage.objects FOR SELECT TO authenticated USING (bucket_id='notes-assets' AND (storage.foldername(name))[1]=auth.jwt()->>'sub');
 CREATE POLICY notes_asset_files_insert ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id='notes-assets' AND (storage.foldername(name))[1]=auth.jwt()->>'sub');
+COMMIT;
