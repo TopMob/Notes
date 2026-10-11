@@ -12,7 +12,7 @@ test('Supabase SQL installs without changing notes and enforces CAS, atomic bund
       CREATE TABLE notebooks(id text PRIMARY KEY,user_id text,title text,created_at bigint,updated_at bigint,"order" integer,deleted_at bigint);
       CREATE TABLE sections(id text PRIMARY KEY,user_id text,notebook_id text,title text,color text,"order" integer,updated_at bigint,deleted_at bigint);
       CREATE TABLE pages(id text PRIMARY KEY,user_id text,section_id text,title text,created_at bigint,updated_at bigint,"order" integer,camera jsonb,background jsonb,deleted_at bigint);
-      CREATE TABLE page_elements(id text PRIMARY KEY,user_id text,page_id text,type text,data text,updated_at bigint,deleted_at bigint);
+      CREATE TABLE page_elements(id text PRIMARY KEY,user_id text,page_id text,type text,data jsonb,updated_at bigint,deleted_at bigint);
       CREATE SCHEMA storage; CREATE TABLE storage.buckets(id text PRIMARY KEY,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
       CREATE TABLE storage.objects(bucket_id text,name text);
       CREATE FUNCTION storage.foldername(text) RETURNS text[] LANGUAGE sql AS $$ SELECT string_to_array($1,'/') $$;
@@ -37,7 +37,7 @@ test('Supabase SQL installs without changing notes and enforces CAS, atomic bund
     const elementsA = (await db.query(`SELECT jsonb_object_agg(e.id,to_jsonb(e)) AS records FROM page_elements e WHERE page_id='p'`)).rows[0].records;
     await assert.rejects(commit('pages','p',{...page,title:'Must rollback'},rawA,elementsA,'missing asset bundle',['missing']), e => e.code === '40001');
     assert.equal((await db.query('SELECT title FROM pages WHERE id=$1',['p'])).rows[0].title,'Device A');
-    assert.equal((await db.query('SELECT data FROM page_elements WHERE id=$1',['bundle_p'])).rows[0].data,'second bundle');
+    assert.equal((await db.query("SELECT data #>> '{}' AS data FROM page_elements WHERE id=$1",['bundle_p'])).rows[0].data,'second bundle');
     await assert.rejects(commit('notebooks','existing',{id:'existing',title:'Must not touch',createdAt:1,order:0}), e => e.code === '40001');
     const pulled = (await db.query('SELECT notes_pull_v1() AS snapshot')).rows[0].snapshot;
     assert.equal(pulled.notebooks.length,1); assert.equal(pulled.pages.length,1);

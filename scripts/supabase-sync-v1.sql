@@ -95,7 +95,7 @@ BEGIN
   ELSE
     INSERT INTO public.pages(id,user_id,section_id,title,created_at,updated_at,"order",camera,background,deleted_at) VALUES(entity_id,owner,parent,new_record->>'title',(new_record->>'createdAt')::bigint,stamp,(new_record->>'order')::numeric,new_record->'camera',new_record->'background',NULL)
     ON CONFLICT(id) DO UPDATE SET section_id=excluded.section_id,title=excluded.title,"order"=excluded."order",camera=excluded.camera,background=excluded.background,updated_at=excluded.updated_at,deleted_at=NULL WHERE pages.user_id=owner;
-    INSERT INTO public.page_elements(id,user_id,page_id,type,data,updated_at,deleted_at,schema_version) VALUES('bundle_' || entity_id,owner,entity_id,'bundle',new_bundle,stamp,NULL,2)
+    INSERT INTO public.page_elements(id,user_id,page_id,type,data,updated_at,deleted_at,schema_version) VALUES('bundle_' || entity_id,owner,entity_id,'bundle',to_jsonb(new_bundle),stamp,NULL,2)
     ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at,deleted_at=NULL,schema_version=2 WHERE page_elements.user_id=owner;
   END IF;
   RETURN jsonb_build_object('committed',true);
