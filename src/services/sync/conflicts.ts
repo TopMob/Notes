@@ -27,6 +27,17 @@ export async function listConflicts(db: IDBPDatabase<OneNoteDB>, binding: SyncBi
     const remote = cloud[state.entity].find(row => row.id === state.entityId);
     const elements = cloudElementsFor(cloud, state.entityId);
     const count = (elements: typeof local.elements) => elements.strokes.length + elements.shapes.length + elements.textBlocks.length;
+    const isLocalDeleted = !local.record || !!local.record.deletedAt;
+    const isRemoteDeleted = !remote || !!remote.deletedAt;
+    if (isLocalDeleted && isRemoteDeleted) {
+      const tx = db.transaction('syncOutbox', 'readwrite');
+      const row = await tx.store.get(revisionKey(binding, state.entity, state.entityId)) as RevisionState | undefined;
+      if (row && row.conflict) {
+        await tx.store.put({ ...row, conflict: false });
+      }
+      await tx.done;
+      continue;
+    }
     result.push({ entity: state.entity, id: state.entityId, localTitle: !local.record || local.record.deletedAt ? 'Удалено на этом устройстве' : local.record.title, cloudTitle: !remote ? count(elements) ? 'Содержимое без метаданных страницы' : 'Удалено в облаке' : remote.deletedAt ? 'Удалено в облаке' : remote.title, localCount: count(local.elements), cloudCount: count(elements) });
   }
   return result;
@@ -46,6 +57,24 @@ export async function resolveConflict(db: IDBPDatabase<OneNoteDB>, binding: Sync
   const localCanonical = canonicalVersion(entity, local.record, local.elements);
   const queueKey = JSON.stringify([binding.provider, binding.userId, entity, id]);
   const queuedBefore = await db.get('syncOutbox', queueKey) as OutboxEntry | undefined;
+  const isDeletedLocal = !local.record || !!local.record.deletedAt;
+  const isDeletedRemote = !remote || !!remote.deletedAt;
+
+  if (isDeletedLocal && isDeletedRemote) {
+    const tx = db.transaction([entity, 'strokes', 'shapes', 'textBlocks', 'syncOutbox'], 'readwrite');
+    void tx.done.catch(() => {});
+    await tx.objectStore('syncOutbox').delete(queueKey);
+    await putRevision(tx, binding, entity, id, remoteHash);
+    if (entity === 'pages') {
+      const nowElements = { strokes: await tx.objectStore('strokes').index('by-page').getAll(id), shapes: await tx.objectStore('shapes').index('by-page').getAll(id), textBlocks: await tx.objectStore('textBlocks').index('by-page').getAll(id) };
+      for (const name of ['strokes', 'shapes', 'textBlocks'] as const) {
+        for (const row of nowElements[name]) await tx.objectStore(name).delete(row.id);
+      }
+    }
+    await tx.done;
+    return;
+  }
+
   const other = choice === 'local' ? remoteVersion : local.record;
   const otherElements = choice === 'local' ? remoteElements : local.elements;
   const otherHash = choice === 'local' ? remoteHash : localHash;
@@ -63,16 +92,17 @@ export async function resolveConflict(db: IDBPDatabase<OneNoteDB>, binding: Sync
     const nowQueued = await tx.objectStore('syncOutbox').get(queueKey) as OutboxEntry | undefined;
     if (canonicalVersion(entity, nowRecord, nowElements) !== localCanonical || nowQueued?.operationId !== queuedBefore?.operationId || !isCurrent()) throw new Error('Заметка изменилась в другой вкладке. Повторите выбор.');
     for (const asset of assets) await tx.objectStore('assets').put(asset);
-    if (entity === 'pages' && other && otherHash && localHash !== remoteHash) {
+    if (entity === 'pages' && other && otherHash && localHash !== remoteHash && !other.deletedAt) {
       const archiveId = `conflict_${id}_${otherHash.slice(0, 20)}`;
       if (!await tx.objectStore('pages').get(archiveId)) {
         const sectionId = local.record && 'sectionId' in local.record ? local.record.sectionId : remote && 'sectionId' in remote ? remote.sectionId : '';
-        const section = await tx.objectStore('sections').get(sectionId);
-        if (!section) throw new Error('Раздел версии отсутствует локально. Сначала разрешите конфликт раздела.');
-        const pageVersion = other as OneNoteDB['pages']['value'];
-        await tx.objectStore('pages').put({ ...pageVersion, id: archiveId, sectionId, title: `${pageVersion.title} (${choice === 'local' ? 'облачная' : 'локальная'} версия)`, createdAt: Date.now(), deletedAt: null, order: other.order, slug: `conflict-${otherHash.slice(0, 20)}`, slugAliases: [] });
-        for (const name of ['strokes', 'shapes', 'textBlocks'] as const) for (const row of otherElements[name]) await tx.objectStore(name).put({ ...row, id: `conflict_${row.id}_${otherHash.slice(0, 20)}`, pageId: archiveId });
-        if (!section.deletedAt) await queueLocalChange(tx, 'pages', archiveId, 'put', binding);
+        const section = sectionId ? await tx.objectStore('sections').get(sectionId) : null;
+        if (section && !section.deletedAt) {
+          const pageVersion = other as OneNoteDB['pages']['value'];
+          await tx.objectStore('pages').put({ ...pageVersion, id: archiveId, sectionId, title: `${pageVersion.title} (${choice === 'local' ? 'облачная' : 'локальная'} версия)`, createdAt: Date.now(), deletedAt: null, order: other.order, slug: `conflict-${otherHash.slice(0, 20)}`, slugAliases: [] });
+          for (const name of ['strokes', 'shapes', 'textBlocks'] as const) for (const row of otherElements[name]) await tx.objectStore(name).put({ ...row, id: `conflict_${row.id}_${otherHash.slice(0, 20)}`, pageId: archiveId });
+          await queueLocalChange(tx, 'pages', archiveId, 'put', binding);
+        }
       }
     }
     const previousState = await tx.objectStore('syncOutbox').get(revisionKey(binding, entity, id)) as RevisionState | undefined;
@@ -85,7 +115,9 @@ export async function resolveConflict(db: IDBPDatabase<OneNoteDB>, binding: Sync
       if (entity === 'pages') {
         for (const name of ['strokes', 'shapes', 'textBlocks'] as const) {
           for (const row of nowElements[name]) await tx.objectStore(name).delete(row.id);
-          for (const row of remoteElements[name]) await tx.objectStore(name).put(row);
+          if (!remoteVersion?.deletedAt) {
+            for (const row of remoteElements[name]) await tx.objectStore(name).put(row);
+          }
         }
       }
       if (orphan) {
@@ -94,6 +126,11 @@ export async function resolveConflict(db: IDBPDatabase<OneNoteDB>, binding: Sync
         await tx.objectStore('syncOutbox').put({ ...queued, base: remoteHash });
       }
     } else {
+      if (entity === 'pages' && isDeletedLocal) {
+        for (const name of ['strokes', 'shapes', 'textBlocks'] as const) {
+          for (const row of nowElements[name]) await tx.objectStore(name).delete(row.id);
+        }
+      }
       await queueLocalChange(tx, entity, id, !local.record || local.record.deletedAt ? 'delete' : 'put', binding);
       const queued = await tx.objectStore('syncOutbox').get(queueKey) as OutboxEntry;
       await tx.objectStore('syncOutbox').put({ ...queued, base: remoteHash });

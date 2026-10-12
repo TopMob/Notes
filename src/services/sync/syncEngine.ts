@@ -204,6 +204,12 @@ class SyncEngine {
       await resolveConflict(await getDB(), { provider: providerType, userId }, provider, entity, id, choice, isCurrent);
       if (isCurrent()) await useNotebookStore.getState().refreshFromStorage();
       await this.flushPendingChangesNow();
+      const remaining = await this.getConflicts();
+      if (remaining.length === 0) {
+        useSyncStore.getState().setError(null);
+        useSyncStore.getState().setStatus('synced');
+        useSyncStore.getState().setLastSyncedAt(Date.now());
+      }
     });
   }
 

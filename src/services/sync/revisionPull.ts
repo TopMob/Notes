@@ -28,11 +28,12 @@ export async function applyVersionedPull(db: IDBPDatabase<OneNoteDB>, cloud: Clo
       const incoming = await versionHash(entity, remote, remoteElements);
       const state = states.get(revisionKey(binding, entity as OutboxEntity, remote.id));
       const protectedLocal = stateRows.some(r => r.provider === binding.provider && r.userId === binding.userId && r.entity === entity && r.entityId === remote.id) || entity === 'pages' && protectedPages.has(remote.id);
-      let conflict = !!row && actual !== incoming && (protectedLocal || state?.conflict || state?.base !== actual);
+      const bothDeleted = (!row || !!('deletedAt' in row && row.deletedAt)) && !!remote.deletedAt;
+      let conflict = !bothDeleted && !!row && actual !== incoming && (protectedLocal || state?.conflict || state?.base !== actual);
       if (entity === 'pages' && row && !remote.deletedAt && actual !== incoming && Object.values(localElements || {}).some(rows => rows.length) && !cloud.completePageIds?.includes(remote.id)) conflict = true;
       // Never bypass a known unsent operation, including metadata-only changes.
-      if (protectedLocal) options.protected.add(`${entity}:${remote.id}`);
-      if (!conflict && !protectedLocal) {
+      if (protectedLocal && !bothDeleted) options.protected.add(`${entity}:${remote.id}`);
+      if (!conflict && (!protectedLocal || bothDeleted)) {
         if (actual === incoming) options.unchanged.add(`${entity}:${remote.id}`);
         else options.accepted.add(`${entity}:${remote.id}`);
       }

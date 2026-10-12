@@ -96,18 +96,37 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
     }
     const protectedSections = new Set<string>();
     const protectedNotebooks = new Set<string>();
-    for (const page of cloud.pages) if (page.deletedAt && localContent.get(page.id)?.size && !revisions?.accepted.has(`pages:${page.id}`)) {
-      protectedPageIds.add(page.id); conflicts.add(page.id);
-    }
-    for (const section of cloud.sections) if (section.deletedAt) {
-      for (const page of maps.pages.values()) if (page.sectionId === section.id && localContent.get(page.id)?.size && !revisions?.accepted.has(`pages:${page.id}`)) {
-        protectedSections.add(section.id); protectedPageIds.add(page.id); conflicts.add(page.id);
+    for (const page of cloud.pages) {
+      if (page.deletedAt && localContent.get(page.id)?.size) {
+        if (revisions?.accepted.has(`pages:${page.id}`) || revisions?.unchanged.has(`pages:${page.id}`)) continue;
+        const localPage = maps.pages.get(page.id);
+        if (!localPage || localPage.deletedAt) continue;
+        protectedPageIds.add(page.id); conflicts.add(page.id);
       }
     }
-    for (const notebook of cloud.notebooks) if (notebook.deletedAt) {
-      for (const section of maps.sections.values()) if (section.notebookId === notebook.id) {
-        for (const page of maps.pages.values()) if (page.sectionId === section.id && localContent.get(page.id)?.size && !revisions?.accepted.has(`pages:${page.id}`)) {
-          protectedNotebooks.add(notebook.id); protectedSections.add(section.id); protectedPageIds.add(page.id); conflicts.add(page.id);
+    for (const section of cloud.sections) {
+      if (section.deletedAt) {
+        const localSection = maps.sections.get(section.id);
+        if (!localSection || localSection.deletedAt) continue;
+        for (const page of maps.pages.values()) {
+          if (page.sectionId === section.id && !page.deletedAt && localContent.get(page.id)?.size && !revisions?.accepted.has(`pages:${page.id}`) && !revisions?.unchanged.has(`pages:${page.id}`)) {
+            protectedSections.add(section.id); protectedPageIds.add(page.id); conflicts.add(page.id);
+          }
+        }
+      }
+    }
+    for (const notebook of cloud.notebooks) {
+      if (notebook.deletedAt) {
+        const localNotebook = maps.notebooks.get(notebook.id);
+        if (!localNotebook || localNotebook.deletedAt) continue;
+        for (const section of maps.sections.values()) {
+          if (section.notebookId === notebook.id && !section.deletedAt) {
+            for (const page of maps.pages.values()) {
+              if (page.sectionId === section.id && !page.deletedAt && localContent.get(page.id)?.size && !revisions?.accepted.has(`pages:${page.id}`) && !revisions?.unchanged.has(`pages:${page.id}`)) {
+                protectedNotebooks.add(notebook.id); protectedSections.add(section.id); protectedPageIds.add(page.id); conflicts.add(page.id);
+              }
+            }
+          }
         }
       }
     }
@@ -122,8 +141,8 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
       for (const row of remote) {
         const previous = maps[name].get(row.id);
         if (revisions?.unchanged.has(`${name}:${row.id}`)) continue;
-        if (name === 'sections' && 'notebookId' in row && (!maps.notebooks.has(row.notebookId) || maps.notebooks.get(row.notebookId)?.deletedAt)) continue;
-        if (name === 'pages' && 'sectionId' in row && (!maps.sections.has(row.sectionId) || maps.sections.get(row.sectionId)?.deletedAt)) continue;
+        if (name === 'sections' && 'notebookId' in row && !row.deletedAt && (!maps.notebooks.has(row.notebookId) || maps.notebooks.get(row.notebookId)?.deletedAt)) continue;
+        if (name === 'pages' && 'sectionId' in row && !row.deletedAt && (!maps.sections.has(row.sectionId) || maps.sections.get(row.sectionId)?.deletedAt)) continue;
         if (name === 'pages' && protectedPageIds.has(row.id) || revisions?.protected.has(`${name}:${row.id}`)) continue;
         if (row.deletedAt && (name === 'sections' && protectedSections.has(row.id) || name === 'notebooks' && protectedNotebooks.has(row.id))) continue;
         if (previous && row.updatedAt <= Math.max(previous.updatedAt || 0, previous.deletedAt || 0) && !revisions?.accepted.has(`${name}:${row.id}`)) continue;

@@ -211,3 +211,50 @@ test('camera-only viewport updates do not enter sync outbox or notify syncEngine
   assert.equal(notified, 1);
 });
 
+test('deleted page on both local and cloud does not produce conflict even with leftover elements', async () => {
+  const safePull = loadModule('src/services/sync/safePull.ts');
+  const cloud = {
+    notebooks: [{ id: 'n1', title: 'Notebook', createdAt: 1, updatedAt: 1, order: 0 }],
+    sections: [{ id: 's1', notebookId: 'n1', title: 'Section', color: 'blue', order: 0, updatedAt: 1 }],
+    pages: [{ id: 'deleted_page', title: 'Deleted Page', sectionId: 's1', createdAt: 1, updatedAt: 2, deletedAt: 2, order: 0, camera: { x: 0, y: 0, zoom: 1 }, background: 'plain' }],
+    elements: Array.from({ length: 408 }, (_, i) => ({
+      id: `el_${i}`,
+      pageId: 'deleted_page',
+      type: 'stroke',
+      data: { id: `el_${i}`, pageId: 'deleted_page', points: [{ x: 0, y: 0 }], tool: 'pen', color: 'black', baseWidth: 2, opacity: 1, bounds: { minX: 0, minY: 0, maxX: 0, maxY: 0 }, createdAt: 1 },
+      updatedAt: 1,
+    })),
+  };
+  const localTables = {
+    notebooks: [{ id: 'n1', title: 'Notebook', createdAt: 1, updatedAt: 1, order: 0 }],
+    sections: [{ id: 's1', notebookId: 'n1', title: 'Section', color: 'blue', order: 0, updatedAt: 1 }],
+    pages: [{ id: 'deleted_page', title: 'Deleted Page', sectionId: 's1', createdAt: 1, updatedAt: 2, deletedAt: 2, order: 0, camera: { x: 0, y: 0, zoom: 1 }, background: 'plain' }],
+    strokes: Array.from({ length: 408 }, (_, i) => ({ id: `el_${i}`, pageId: 'deleted_page', points: [{ x: 0, y: 0 }], tool: 'pen', color: 'black', baseWidth: 2, opacity: 1, bounds: { minX: 0, minY: 0, maxX: 0, maxY: 0 }, createdAt: 1 })),
+    shapes: [],
+    textBlocks: [],
+    syncOutbox: [],
+    assets: [],
+  };
+  const mockDb = {
+    transaction: () => ({
+      done: Promise.resolve(),
+      objectStore: name => ({
+        getAll: async () => localTables[name] || [],
+        get: async id => (localTables[name] || []).find(r => r.id === id),
+        put: async item => {
+          const arr = localTables[name] || [];
+          const idx = arr.findIndex(r => r.id === item.id);
+          if (idx >= 0) arr[idx] = item; else arr.push(item);
+        },
+        delete: async id => {
+          const arr = localTables[name] || [];
+          const idx = arr.findIndex(r => r.id === id);
+          if (idx >= 0) arr.splice(idx, 1);
+        },
+      }),
+    }),
+  };
+  const res = await safePull.applyCloudPull(mockDb, cloud, new Set(), () => true);
+  assert.equal(res.conflicts.size, 0, 'No conflict should be raised when page is deleted on both sides');
+});
+

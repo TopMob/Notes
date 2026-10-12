@@ -31,7 +31,16 @@ export const CloudSettingsModal: React.FC = () => {
   useEffect(() => {
     let current = true;
     setConflicts([]); setConflictError(null); setConflictHistory([]);
-    if (isCloudSettingsOpen && providerType !== 'local' && isSignedIn) void Promise.all([syncEngine.getConflicts(), syncEngine.getConflictHistory()]).then(([rows, history]) => { if (current) { setConflicts(rows); setConflictHistory(history); } }).catch(() => { if (current) setConflictError('Не удалось прочитать облачные версии. Повторите синхронизацию после восстановления связи.'); });
+    if (isCloudSettingsOpen && providerType !== 'local' && isSignedIn) void Promise.all([syncEngine.getConflicts(), syncEngine.getConflictHistory()]).then(([rows, history]) => {
+      if (current) {
+        setConflicts(rows);
+        setConflictHistory(history);
+        if (rows.length === 0 && useSyncStore.getState().errorMessage?.includes('Различаются версии')) {
+          useSyncStore.getState().setError(null);
+          useSyncStore.getState().setStatus('synced');
+        }
+      }
+    }).catch(() => { if (current) setConflictError('Не удалось прочитать облачные версии. Повторите синхронизацию после восстановления связи.'); });
     return () => { current = false; };
   }, [isCloudSettingsOpen, providerType, isSignedIn, user?.id, errorMessage]);
 
@@ -105,8 +114,15 @@ export const CloudSettingsModal: React.FC = () => {
     setIsManualSyncing(true); setConflictError(null); setSyncSuccessMsg(null);
     try {
       await syncEngine.chooseConflict(item.entity, item.id, choice);
-      setConflicts(await syncEngine.getConflicts());
+      const remaining = await syncEngine.getConflicts();
+      setConflicts(remaining);
       setConflictHistory(await syncEngine.getConflictHistory());
+      if (remaining.length === 0) {
+        useSyncStore.getState().setError(null);
+        useSyncStore.getState().setStatus('synced');
+        setSyncSuccessMsg('Конфликт версий успешно разрешён!');
+        setTimeout(() => setSyncSuccessMsg(null), 4000);
+      }
     } catch (error) { setConflictError(error instanceof Error ? error.message : 'Не удалось выбрать версию'); }
     finally { setIsManualSyncing(false); }
   };
