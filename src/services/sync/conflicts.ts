@@ -7,7 +7,7 @@ import type { RevisionState } from './revisionState';
 import type { SyncBinding } from './outboxContext';
 import type { ISyncProvider } from './types';
 import { validateCloudPull } from './safePull';
-import { cloudElementsFor, canonicalVersion, versionHash, assetIds } from './protocol.mjs';
+import { cloudElementsFor, canonicalVersion, canonicalContentVersion, contentVersionHash, versionHash, assetIds } from './protocol.mjs';
 import { assetManager } from '../assets/assetManager';
 
 export interface ConflictSummary { entity: OutboxEntity; id: string; localTitle: string; cloudTitle: string; localCount: number; cloudCount: number }
@@ -27,16 +27,22 @@ export async function listConflicts(db: IDBPDatabase<OneNoteDB>, binding: SyncBi
     const remote = cloud[state.entity].find(row => row.id === state.entityId);
     const elements = cloudElementsFor(cloud, state.entityId);
     const count = (elements: typeof local.elements) => elements.strokes.length + elements.shapes.length + elements.textBlocks.length;
-    const isLocalDeleted = !local.record || !!local.record.deletedAt;
-    const isRemoteDeleted = !remote || !!remote.deletedAt;
-    if (isLocalDeleted && isRemoteDeleted) {
-      const tx = db.transaction('syncOutbox', 'readwrite');
-      const row = await tx.store.get(revisionKey(binding, state.entity, state.entityId)) as RevisionState | undefined;
-      if (row && row.conflict) {
-        await tx.store.put({ ...row, conflict: false });
+    const isLocalDeleted = local.record ? !!local.record.deletedAt : state.entity !== 'pages' || count(local.elements) === 0;
+    const isRemoteDeleted = remote ? !!remote.deletedAt : state.entity !== 'pages' || count(elements) === 0;
+    const sameContent = canonicalContentVersion(state.entity, local.record, local.elements) === canonicalContentVersion(state.entity, remote, elements);
+    if (isLocalDeleted && isRemoteDeleted || sameContent) {
+      const remoteHash = await versionHash(state.entity, remote, elements);
+      const contentHash = await contentVersionHash(state.entity, remote, elements);
+      const tx = db.transaction([state.entity, 'strokes', 'shapes', 'textBlocks', 'syncOutbox'], 'readwrite');
+      const nowRecord = await tx.objectStore(state.entity).get(state.entityId);
+      const nowElements = { strokes: await tx.objectStore('strokes').index('by-page').getAll(state.entityId), shapes: await tx.objectStore('shapes').index('by-page').getAll(state.entityId), textBlocks: await tx.objectStore('textBlocks').index('by-page').getAll(state.entityId) };
+      const row = await tx.objectStore('syncOutbox').get(revisionKey(binding, state.entity, state.entityId)) as RevisionState | undefined;
+      const unchanged = canonicalVersion(state.entity, nowRecord, nowElements) === canonicalVersion(state.entity, local.record, local.elements);
+      if (row?.conflict && unchanged) {
+        await putRevision(tx, binding, state.entity, state.entityId, remoteHash, false, contentHash);
       }
       await tx.done;
-      continue;
+      if (unchanged) continue;
     }
     result.push({ entity: state.entity, id: state.entityId, localTitle: !local.record || local.record.deletedAt ? 'Удалено на этом устройстве' : local.record.title, cloudTitle: !remote ? count(elements) ? 'Содержимое без метаданных страницы' : 'Удалено в облаке' : remote.deletedAt ? 'Удалено в облаке' : remote.title, localCount: count(local.elements), cloudCount: count(elements) });
   }
@@ -57,8 +63,8 @@ export async function resolveConflict(db: IDBPDatabase<OneNoteDB>, binding: Sync
   const localCanonical = canonicalVersion(entity, local.record, local.elements);
   const queueKey = JSON.stringify([binding.provider, binding.userId, entity, id]);
   const queuedBefore = await db.get('syncOutbox', queueKey) as OutboxEntry | undefined;
-  const isDeletedLocal = !local.record || !!local.record.deletedAt;
-  const isDeletedRemote = !remote || !!remote.deletedAt;
+  const isDeletedLocal = local.record ? !!local.record.deletedAt : localHash === null;
+  const isDeletedRemote = remote ? !!remote.deletedAt : remoteHash === null;
 
   if (isDeletedLocal && isDeletedRemote) {
     const tx = db.transaction([entity, 'strokes', 'shapes', 'textBlocks', 'syncOutbox'], 'readwrite');

@@ -31,10 +31,20 @@ export function canonicalVersion(entity, record, elements) {
   return stable(value);
 }
 export async function versionHash(entity, record, elements) {
-  const canonical = canonicalVersion(entity, record, elements);
+  return hashCanonical(canonicalVersion(entity, record, elements));
+}
+async function hashCanonical(canonical) {
   if (canonical === 'absent') return null;
   const bytes = new TextEncoder().encode(canonical);
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(n => n.toString(16).padStart(2, '0')).join('');
+}
+// The viewport is device-local. Keep wire revision hashes unchanged, but do not
+// treat scrolling or zooming as a content conflict.
+export function canonicalContentVersion(entity, record, elements) {
+  return canonicalVersion(entity, entity === 'pages' && record ? { ...record, camera: undefined } : record, elements);
+}
+export async function contentVersionHash(entity, record, elements) {
+  return hashCanonical(canonicalContentVersion(entity, record, elements));
 }
 export function cloudElementsFor(cloud, pageId) {
   const result = { strokes: [], shapes: [], textBlocks: [] };

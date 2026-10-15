@@ -5,7 +5,7 @@ import { validateLegacyBackup } from '../../db/backupValidation';
 import { putRevision } from './revisionState';
 import type { SyncBinding } from './outboxContext';
 import type { OutboxEntity } from './outbox';
-import { canonicalVersion } from './protocol.mjs';
+import { canonicalContentVersion } from './protocol.mjs';
 import type { ImageAssetRecord } from '../../db/idb';
 
 export interface PullRevisions {
@@ -13,7 +13,7 @@ export interface PullRevisions {
   accepted: Set<string>;
   protected: Set<string>;
   unchanged: Set<string>;
-  bases: { entity: OutboxEntity; id: string; hash: string | null; canonical: string; conflict: boolean }[];
+  bases: { entity: OutboxEntity; id: string; hash: string | null; contentHash: string | null; canonical: string; conflict: boolean }[];
   assets: ImageAssetRecord[];
   isSnapshotCurrent: (local: any[][]) => boolean;
 }
@@ -87,7 +87,7 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
     }
     // Without a shared base revision, a differing populated page must not be overlaid or replaced.
     for (const [pageId, remote] of remoteContent) {
-      if (revisions?.accepted.has(`pages:${pageId}`)) continue;
+      if (revisions?.accepted.has(`pages:${pageId}`) || revisions?.unchanged.has(`pages:${pageId}`)) continue;
       if (protectedPageIds.has(pageId)) continue;
       const existing = localContent.get(pageId);
       if (existing?.size && (existing.size !== remote.size || [...remote].some(([id, data]) => !existing.has(id) || stable(existing.get(id)) !== stable(data)))) {
@@ -178,23 +178,24 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
       checkCurrent();
       pulled.elements++; changedPageIds.add(el.pageId);
     }
+    const pageConflicts = new Set(conflicts);
     if (revisions) for (const base of revisions.bases) {
       if (base.conflict) {
         conflicts.add(base.id);
         const previous = await tx.objectStore('syncOutbox').get(JSON.stringify(['state', revisions.binding.provider, revisions.binding.userId, base.entity, base.id]));
-        await putRevision(tx, revisions.binding, base.entity, base.id, previous && 'base' in previous ? previous.base ?? null : null, true);
+        await putRevision(tx, revisions.binding, base.entity, base.id, previous && 'base' in previous ? previous.base ?? null : null, true, previous && 'contentBase' in previous ? previous.contentBase : undefined);
       } else {
         const elements = base.entity === 'pages' ? {
           strokes: [...maps.strokes.values()].filter(row => row.pageId === base.id),
           shapes: [...maps.shapes.values()].filter(row => row.pageId === base.id),
           textBlocks: [...maps.textBlocks.values()].filter(row => row.pageId === base.id),
         } : undefined;
-        if (canonicalVersion(base.entity, maps[base.entity].get(base.id), elements) === base.canonical) await putRevision(tx, revisions.binding, base.entity, base.id, base.hash);
+        if (canonicalContentVersion(base.entity, maps[base.entity].get(base.id), elements) === base.canonical) await putRevision(tx, revisions.binding, base.entity, base.id, base.hash, false, base.contentHash);
       }
     }
-    if (revisions) for (const id of conflicts) {
+    if (revisions) for (const id of pageConflicts) {
       const previous = await tx.objectStore('syncOutbox').get(JSON.stringify(['state', revisions.binding.provider, revisions.binding.userId, 'pages', id]));
-      await putRevision(tx, revisions.binding, 'pages', id, previous && 'base' in previous ? previous.base ?? null : null, true);
+      await putRevision(tx, revisions.binding, 'pages', id, previous && 'base' in previous ? previous.base ?? null : null, true, previous && 'contentBase' in previous ? previous.contentBase : undefined);
     }
     checkCurrent();
     await done;

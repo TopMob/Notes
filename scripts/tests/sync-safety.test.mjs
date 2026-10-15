@@ -13,9 +13,28 @@ function loadModule(filename, boundaries = {}, cache = new Map()) {
   Function('require', 'module', 'exports', js)(localRequire, module, module.exports); return module.exports;
 }
 globalThis.localStorage = { getItem: () => null, setItem: () => {} };
+function conflictFixture() {
+  const binding = { provider: 'turso', userId: 'user' };
+  const page = { id: 'p', sectionId: 's', title: 'Page', order: 0, createdAt: 1, updatedAt: 1, camera: { x: 0, y: 0, zoom: 1 }, background: 'plain' };
+  const stroke = { id: 'a', pageId: 'p', points: [{ x: 0, y: 0 }], tool: 'pen', color: 'black', baseWidth: 2, opacity: 1, bounds: { minX: 0, minY: 0, maxX: 0, maxY: 0 }, createdAt: 1 };
+  const tables = { notebooks: [{ id: 'n', title: 'Notebook', order: 0, createdAt: 1, updatedAt: 1 }], sections: [{ id: 's', notebookId: 'n', title: 'Section', color: 'blue', order: 0, updatedAt: 1 }], pages: [structuredClone(page)], strokes: [structuredClone(stroke)], shapes: [], textBlocks: [], syncOutbox: [], assets: [] };
+  const keyOf = row => row.key ?? row.id;
+  const store = name => ({
+    getAll: async () => structuredClone(tables[name]),
+    get: async id => structuredClone(tables[name].find(row => keyOf(row) === id)),
+    put: async row => { const i = tables[name].findIndex(old => keyOf(old) === keyOf(row)); if (i < 0) tables[name].push(structuredClone(row)); else tables[name][i] = structuredClone(row); },
+    delete: async id => { tables[name] = tables[name].filter(row => keyOf(row) !== id); },
+    index: () => ({ getAll: async id => structuredClone(tables[name].filter(row => row.pageId === id)) }),
+  });
+  const db = { getAll: name => store(name).getAll(), get: (name, id) => store(name).get(id), transaction: names => ({ objectStore: store, store: store(typeof names === 'string' ? names : names[0]), done: Promise.resolve() }) };
+  const state = { key: JSON.stringify(['state', 'turso', 'user', 'pages', 'p']), provider: 'state', bindingProvider: 'turso', userId: 'user', entity: 'pages', entityId: 'p', base: null, conflict: true };
+  tables.syncOutbox.push(state);
+  const cloud = { notebooks: structuredClone(tables.notebooks), sections: structuredClone(tables.sections), pages: [page], elements: [{ id: 'a', pageId: 'p', type: 'stroke', data: stroke, updatedAt: 1 }], completePageIds: ['p'] };
+  return { db, tables, cloud, binding, state };
+}
 const empty = () => ({ notebooks: [], sections: [], pages: [], elements: [] });
 function deferred() { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; }
-function engineFixture(overrides = {}, localTables = {}) {
+function engineFixture(overrides = {}, localTables = {}, database, boundaries = {}) {
   const queued = new Map(); const records = new Map(); let revision = 0;
   const enqueue = (entity, entityId, record, action = 'put') => {
     const key = `${entity}:${entityId}`;
@@ -29,7 +48,7 @@ function engineFixture(overrides = {}, localTables = {}) {
   const api = loadModule('src/services/sync/syncEngine.ts', {
     './tursoProvider': { TursoProvider: class { constructor() { return provider; } } },
     './supabaseProvider': { SupabaseProvider: class { setTokenProvider() {} } },
-    '../../db/idb': { getDB: async () => ({ getAll: async name => localTables[name] || [], transaction: () => ({ done: Promise.resolve() }) }) },
+    '../../db/idb': { getDB: async () => database || ({ getAll: async name => localTables[name] || [], transaction: () => ({ done: Promise.resolve() }) }) },
     '../../db/storage': { loadPageData: async () => ({ strokes: [], shapes: [], textBlocks: [] }) },
     '../../store/useCanvasStore': { useCanvasStore: { getState: () => canvas, setState() { throw Error('Do not replace active canvas directly'); } } },
     '../../store/useNotebookStore': { useNotebookStore: { getState: () => ({ refreshFromStorage: async () => { refreshes++; } }) } },
@@ -46,6 +65,7 @@ function engineFixture(overrides = {}, localTables = {}) {
         return { entry, record, [entry.entity === 'notebooks' ? 'notebook' : entry.entity === 'sections' ? 'section' : 'page']: record, elements: { strokes: [], shapes: [], textBlocks: [] } };
       },
     },
+    ...boundaries,
   });
   const notify = api.syncEngine.notifyChange.bind(api.syncEngine);
   api.syncEngine.notifyChange = payload => {
@@ -256,5 +276,129 @@ test('deleted page on both local and cloud does not produce conflict even with l
   };
   const res = await safePull.applyCloudPull(mockDb, cloud, new Set(), () => true);
   assert.equal(res.conflicts.size, 0, 'No conflict should be raised when page is deleted on both sides');
+});
+
+test('viewport changes preserve wire hashes but are not content differences', async () => {
+  const { canonicalContentVersion, versionHash } = await import('../../src/services/sync/protocol.mjs');
+  const { cloud } = conflictFixture();
+  const page = cloud.pages[0];
+  const moved = { ...page, camera: { x: 100, y: 200, zoom: 2 } };
+  assert.notEqual(await versionHash('pages', page), await versionHash('pages', moved));
+  assert.equal(canonicalContentVersion('pages', page), canonicalContentVersion('pages', moved));
+  assert.notEqual(canonicalContentVersion('pages', page), canonicalContentVersion('pages', { ...moved, background: 'grid-small' }));
+});
+
+test('versioned pull clears stale viewport conflicts and accepts later cloud edits after scrolling', async () => {
+  const { applyVersionedPull } = loadModule('src/services/sync/revisionPull.ts');
+  const { db, tables, cloud, binding, state } = conflictFixture();
+  tables.pages[0].camera = { x: 100, y: 200, zoom: 2 };
+  const first = await applyVersionedPull(db, cloud, {}, binding, new Set(), () => true);
+  assert.equal(first.conflicts.size, 0);
+  assert.equal((await db.get('syncOutbox', state.key)).conflict, false);
+  assert.equal(tables.pages[0].camera.zoom, 2);
+  tables.pages[0].camera.x = 999;
+  cloud.elements[0].data.color = 'red';
+  cloud.pages[0].updatedAt++;
+  const second = await applyVersionedPull(db, cloud, {}, binding, new Set(), () => true);
+  assert.equal(second.conflicts.size, 0);
+  assert.equal(tables.strokes[0].color, 'red');
+  // Independent local and cloud edits still require a choice, even at equal counts.
+  tables.strokes[0].color = 'blue';
+  cloud.elements[0].data.color = 'green';
+  const third = await applyVersionedPull(db, cloud, {}, binding, new Set(), () => true);
+  assert.ok(third.conflicts.has('p'));
+  assert.equal(tables.strokes[0].color, 'blue');
+});
+
+test('conflict listing removes equivalent versions but retains equal-count content conflicts', async () => {
+  const { listConflicts } = loadModule('src/services/sync/conflicts.ts');
+  const { db, tables, cloud, binding, state } = conflictFixture();
+  tables.pages[0].camera.zoom = 2;
+  const provider = { pullAll: async () => cloud };
+  assert.deepEqual(await listConflicts(db, binding, provider), []);
+  assert.equal((await db.get('syncOutbox', state.key)).conflict, false);
+  tables.syncOutbox.find(row => row.key === state.key).conflict = true;
+  tables.strokes[0].color = 'red';
+  const rows = await listConflicts(db, binding, provider);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].localCount, rows[0].cloudCount);
+  assert.equal((await db.get('syncOutbox', state.key)).conflict, true);
+});
+
+test('guarded sender acknowledges equivalent content despite a persisted conflict without writing cloud data', async () => {
+  const { db, tables, cloud } = conflictFixture();
+  const { syncEngine, queued } = engineFixture({}, {}, db);
+  const entry = { key: 'pages:p', entity: 'pages', entityId: 'p', action: 'put', provider: 'turso', userId: 'user', operationId: '1' };
+  queued.set(entry.key, entry);
+  tables.pages[0].camera.zoom = 2;
+  let writes = 0;
+  const snapshot = { record: tables.pages[0], elements: { strokes: tables.strokes, shapes: [], textBlocks: [] } };
+  const sent = await syncEngine.sendGuarded({ commit: async () => { writes++; } }, 'user', entry, snapshot, cloud, () => {});
+  assert.equal(sent, true);
+  assert.equal(queued.size, 0);
+  assert.equal(writes, 0);
+});
+
+test('restored page queue ignores viewport and temporary image URLs but detects text and element type changes', () => {
+  const { checkOutboxReplay } = loadModule('src/services/sync/replaySafety.ts');
+  const { cloud, tables } = conflictFixture();
+  tables.pages[0].camera.zoom = 2;
+  const localText = { id: 'text', pageId: 'p', contentHTML: '<img data-asset-id="image" src="blob:local">' };
+  const remoteText = { ...localText, contentHTML: '<img data-asset-id="image" src="blob:remote">' };
+  const snapshot = { entry: { entity: 'pages', entityId: 'p', action: 'put' }, record: tables.pages[0], elements: { strokes: tables.strokes, shapes: [], textBlocks: [localText] } };
+  cloud.elements.push({ id: 'text', pageId: 'p', type: 'textBlock', data: remoteText });
+  assert.equal(checkOutboxReplay(snapshot, cloud), 'acknowledged');
+  remoteText.contentHTML += 'Changed';
+  assert.equal(checkOutboxReplay(snapshot, cloud), 'conflict');
+  remoteText.contentHTML = localText.contentHTML;
+  cloud.elements[0].type = 'shape';
+  assert.equal(checkOutboxReplay(snapshot, cloud), 'conflict');
+});
+
+test('notebook conflicts do not create phantom page conflicts with the notebook ID', async () => {
+  const { applyVersionedPull } = loadModule('src/services/sync/revisionPull.ts');
+  const { db, tables, cloud, binding } = conflictFixture();
+  tables.notebooks[0].title = 'Local notebook';
+  cloud.notebooks[0].title = 'Cloud notebook';
+  const result = await applyVersionedPull(db, cloud, {}, binding, new Set(), () => true);
+  assert.ok(result.conflicts.has('n'));
+  const flags = tables.syncOutbox.filter(row => row.conflict);
+  assert.deepEqual(flags.map(row => [row.entity, row.entityId]), [['notebooks', 'n']]);
+});
+
+test('successful background upload preserves error status while other notes have conflicts', async () => {
+  const { db } = conflictFixture();
+  const { syncEngine, useSyncStore } = engineFixture({}, {}, db);
+  syncEngine.notifyChange({ notebooks: [{ id: 'new', title: 'New notebook' }] });
+  useSyncStore.setState({ userId: 'user', lastSyncedAt: 123 });
+  assert.equal(await syncEngine.flushPendingChanges(), true);
+  assert.equal(useSyncStore.getState().status, 'error');
+  assert.match(useSyncStore.getState().errorMessage, /Различаются версии/);
+  assert.equal(useSyncStore.getState().lastSyncedAt, 123);
+});
+
+test('choosing a conflict version reports a failed send instead of declaring sync success', async () => {
+  const { db } = conflictFixture();
+  const { syncEngine, useSyncStore } = engineFixture({ guarded: true }, {}, db, {
+    './conflicts': { resolveConflict: async () => {}, listConflicts: async () => [] },
+  });
+  syncEngine.notifyChange({ notebooks: [{ id: 'n', title: 'Chosen version' }] });
+  useSyncStore.setState({ userId: 'user' });
+  syncEngine.sendGuarded = async () => { useSyncStore.getState().setError('Chosen version upload failed'); return false; };
+  await assert.rejects(syncEngine.chooseConflict('notebooks', 'n', 'local'), /Chosen version upload failed/);
+  assert.equal(useSyncStore.getState().status, 'error');
+  assert.equal(useSyncStore.getState().errorMessage, 'Chosen version upload failed');
+});
+
+test('cloud drawings without page metadata are not treated as a matching deletion', async () => {
+  const { listConflicts } = loadModule('src/services/sync/conflicts.ts');
+  const { db, tables, cloud, binding, state } = conflictFixture();
+  tables.pages[0].deletedAt = 10;
+  cloud.pages = [];
+  const rows = await listConflicts(db, binding, { pullAll: async () => cloud });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].cloudTitle, 'Содержимое без метаданных страницы');
+  assert.equal((await db.get('syncOutbox', state.key)).conflict, true);
+  assert.equal(tables.strokes.length, 1);
 });
 

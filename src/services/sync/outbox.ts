@@ -41,12 +41,12 @@ export async function pendingOutbox(binding: SyncBinding): Promise<OutboxEntry[]
   return all.filter((row): row is OutboxEntry => row.provider === binding.provider && row.userId === binding.userId);
 }
 
-export async function acknowledgeOutbox(entry: OutboxEntry, revision?: string | null): Promise<void> {
+export async function acknowledgeOutbox(entry: OutboxEntry, revision?: string | null, contentRevision?: string | null): Promise<void> {
   const db = await getDB();
   const tx = db.transaction('syncOutbox', 'readwrite');
   const current = await tx.store.get(entry.key) as OutboxEntry | undefined;
   if (revision !== undefined) {
-    await putRevision(tx, entry, entry.entity, entry.entityId, revision);
+    await putRevision(tx, entry, entry.entity, entry.entityId, revision, false, contentRevision);
     if (current && current.operationId !== entry.operationId && current.base === entry.base) await tx.store.put({ ...current, base: revision });
   }
   if (current?.operationId === entry.operationId) await tx.store.delete(entry.key);

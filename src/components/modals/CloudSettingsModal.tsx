@@ -35,10 +35,6 @@ export const CloudSettingsModal: React.FC = () => {
       if (current) {
         setConflicts(rows);
         setConflictHistory(history);
-        if (rows.length === 0 && useSyncStore.getState().errorMessage?.includes('Различаются версии')) {
-          useSyncStore.getState().setError(null);
-          useSyncStore.getState().setStatus('synced');
-        }
       }
     }).catch(() => { if (current) setConflictError('Не удалось прочитать облачные версии. Повторите синхронизацию после восстановления связи.'); });
     return () => { current = false; };
@@ -67,6 +63,7 @@ export const CloudSettingsModal: React.FC = () => {
     setSyncSuccessMsg(null);
     try {
       const stats = await syncEngine.syncAll();
+      setConflicts(await syncEngine.getConflicts());
       if (useSyncStore.getState().errorMessage) return;
       const pushedTotal = stats.pushed.notebooks + stats.pushed.sections + stats.pushed.pages;
       const pushedElem = stats.pushed.elements || 0;
@@ -91,7 +88,7 @@ export const CloudSettingsModal: React.FC = () => {
       setSyncSuccessMsg(msg);
       setTimeout(() => setSyncSuccessMsg(null), 6000);
     } catch (e: any) {
-      // Ошибка отобразится через store
+      if (!useSyncStore.getState().errorMessage) setConflictError(e instanceof Error ? e.message : 'Не удалось обновить список конфликтов. Повторите синхронизацию.');
     } finally {
       setIsManualSyncing(false);
     }
@@ -117,9 +114,7 @@ export const CloudSettingsModal: React.FC = () => {
       const remaining = await syncEngine.getConflicts();
       setConflicts(remaining);
       setConflictHistory(await syncEngine.getConflictHistory());
-      if (remaining.length === 0) {
-        useSyncStore.getState().setError(null);
-        useSyncStore.getState().setStatus('synced');
+      if (remaining.length === 0 && useSyncStore.getState().status === 'synced' && !useSyncStore.getState().errorMessage) {
         setSyncSuccessMsg('Конфликт версий успешно разрешён!');
         setTimeout(() => setSyncSuccessMsg(null), 4000);
       }
@@ -278,7 +273,7 @@ export const CloudSettingsModal: React.FC = () => {
               {conflictError && <div className="sync-error-banner"><AlertCircle size={14} /><span>{conflictError}</span></div>}
               {conflicts.length > 0 && <div className="sync-conflicts">
                 <h3>Разные версии заметок</h3>
-                <p>Выберите рабочую версию. Второй вариант страницы сохранится отдельной копией в её разделе; рисунки не смешиваются.</p>
+                <p>Выберите рабочую версию. Второй вариант страницы сохранится отдельной копией в её разделе; рисунки не смешиваются. Одинаковое количество объектов не означает одинаковое содержимое.</p>
                 {conflicts.map(item => <div className="sync-conflict-card" key={`${item.entity}:${item.id}`}>
                   <div><strong>На устройстве:</strong> {item.localTitle}{item.entity === 'pages' && ` · объектов: ${item.localCount}`}</div>
                   <div><strong>В облаке:</strong> {item.cloudTitle}{item.entity === 'pages' && ` · объектов: ${item.cloudCount}`}</div>

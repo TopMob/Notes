@@ -12,7 +12,7 @@ import { acknowledgeOutbox, pendingOutbox, readOutboxSnapshot, queueLocalChange,
 import { isSyncOwner, rememberSyncOwner } from './outboxContext';
 import { checkOutboxReplay } from './replaySafety';
 import { getRevision, flagConflict } from './revisionState';
-import { versionHash, cloudElementsFor, assetIds } from './protocol.mjs';
+import { canonicalContentVersion, contentVersionHash, versionHash, cloudElementsFor, assetIds } from './protocol.mjs';
 import type { OutboxEntry } from './outbox';
 import { applyVersionedPull } from './revisionPull';
 import { listConflicts, resolveConflict } from './conflicts';
@@ -34,6 +34,10 @@ interface SyncStoreState {
 
 const STORAGE_PROVIDER_KEY = 'onenote_sync_provider';
 const STORAGE_LAST_SYNCED_KEY = 'onenote_last_synced_at';
+const isVersionConflictMessage = (message: string | null) => !!message && [
+  'Различаются версии ', 'Есть разные версии заметок.',
+  'Облако изменилось во время отправки.',
+].some(prefix => message.startsWith(prefix));
 
 const getInitialLastSyncedAt = (): number | null => {
   if (typeof localStorage === 'undefined') return null;
@@ -183,6 +187,13 @@ class SyncEngine {
     if (!userId || !provider || providerType === 'local' || !isSyncOwner(userId)) return [];
     const result = await listConflicts(await getDB(), { provider: providerType, userId }, provider);
     if (useSyncStore.getState().userId !== userId || this.getActiveProvider() !== provider) throw new Error('Аккаунт изменился');
+    if (result.length && !useSyncStore.getState().errorMessage) useSyncStore.getState().setError(`Различаются версии ${result.length} заметок. Выберите рабочую версию в настройках синхронизации.`);
+    if (!result.length && isVersionConflictMessage(useSyncStore.getState().errorMessage)) {
+      const pending = await pendingOutbox({ provider: providerType, userId });
+      if (useSyncStore.getState().userId !== userId || this.getActiveProvider() !== provider) throw new Error('Аккаунт изменился');
+      useSyncStore.getState().setError(null);
+      useSyncStore.getState().setStatus(pending.length ? 'syncing' : 'synced');
+    }
     return result;
   }
 
@@ -203,13 +214,8 @@ class SyncEngine {
       const isCurrent = () => useCanvasStore.getState().getEditRevision() === edits && useSyncStore.getState().userId === userId && this.getActiveProvider() === provider;
       await resolveConflict(await getDB(), { provider: providerType, userId }, provider, entity, id, choice, isCurrent);
       if (isCurrent()) await useNotebookStore.getState().refreshFromStorage();
-      await this.flushPendingChangesNow();
-      const remaining = await this.getConflicts();
-      if (remaining.length === 0) {
-        useSyncStore.getState().setError(null);
-        useSyncStore.getState().setStatus('synced');
-        useSyncStore.getState().setLastSyncedAt(Date.now());
-      }
+      if (!await this.flushPendingChangesNow()) throw new Error(useSyncStore.getState().errorMessage || 'Выбранная версия сохранена локально, но ещё не отправлена в облако. Повторите синхронизацию.');
+      await this.getConflicts();
     });
   }
 
@@ -223,10 +229,11 @@ class SyncEngine {
     if (!deleting && !snapshot.record) throw new Error('Объект очереди отсутствует локально; пустая отправка заблокирована');
     const desiredRecord = deleting ? remote && { ...remote, deletedAt: 1 } : { ...snapshot.record, deletedAt: null };
     const desired = await versionHash(entry.entity, desiredRecord, snapshot.elements);
+    const desiredContent = await contentVersionHash(entry.entity, desiredRecord, snapshot.elements);
     assertContext();
-    if (!state?.conflict && desired === actual) {
+    if (desired === actual || !deleting && canonicalContentVersion(entry.entity, desiredRecord, snapshot.elements) === canonicalContentVersion(entry.entity, remote, remoteElements)) {
       if (!deleting && entry.entity === 'pages') await this.uploadPageAssets(db, provider, snapshot.elements || {}, assertContext);
-      await acknowledgeOutbox(entry, actual); return true;
+      await acknowledgeOutbox(entry, actual, desiredContent); return true;
     }
     const expected = Object.prototype.hasOwnProperty.call(entry, 'base') ? entry.base : state?.base;
     if (state?.conflict || expected === undefined && actual !== null || expected !== undefined && expected !== actual) {
@@ -238,7 +245,7 @@ class SyncEngine {
     try {
       const result = await provider.commit!(userId, { entity: entry.entity, id: entry.entityId, action: deleting ? 'delete' : 'put', expected: expected ?? null, record: snapshot.record, elements: snapshot.elements || undefined });
       assertContext();
-      await acknowledgeOutbox(entry, result.revision);
+      await acknowledgeOutbox(entry, result.revision, desiredContent);
       const rows = cloud[entry.entity] as any[];
       const next = deleting ? remote && { ...remote, deletedAt: Date.now() } : { ...snapshot.record, deletedAt: null, updatedAt: Date.now() };
       if (next) { const index = rows.findIndex(row => row.id === entry.entityId); if (index < 0) rows.push(next); else rows[index] = next; }
@@ -336,9 +343,14 @@ class SyncEngine {
       const remaining = await pendingOutbox(binding);
       this.pendingPageElementIds = new Set(remaining.filter(entry => entry.entity === 'pages').map(entry => entry.entityId));
       this.retryDelay = 2000;
-      useSyncStore.getState().setError(null);
-      useSyncStore.getState().setStatus(remaining.length ? 'syncing' : 'synced');
-      useSyncStore.getState().setLastSyncedAt(Date.now());
+      const conflicts = (await (await getDB()).getAll('syncOutbox')).filter(row => row.provider === 'state' && row.bindingProvider === binding.provider && row.userId === userId && row.conflict);
+      assertContext();
+      if (conflicts.length) useSyncStore.getState().setError(`Различаются версии ${conflicts.length} заметок. Выберите рабочую версию в настройках синхронизации.`);
+      else {
+        useSyncStore.getState().setError(null);
+        useSyncStore.getState().setStatus(remaining.length ? 'syncing' : 'synced');
+        if (!remaining.length) useSyncStore.getState().setLastSyncedAt(Date.now());
+      }
       if (remaining.length && !this.idleTimer) this.idleTimer = setTimeout(() => { this.idleTimer = null; void this.flushPendingChanges(); }, 500);
       return true;
     } catch (err: any) {

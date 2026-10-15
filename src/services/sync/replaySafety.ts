@@ -1,5 +1,6 @@
 import type { CloudPullResult } from './types';
 import type { readOutboxSnapshot } from './outbox';
+import { canonicalContentVersion, cloudElementsFor } from './protocol.mjs';
 
 function stable(value: any): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
@@ -20,12 +21,8 @@ export function checkOutboxReplay(snapshot: NonNullable<Awaited<ReturnType<typeo
     return 'new';
   }
   if (!snapshot.record || remote.deletedAt) return 'conflict';
-  const fields = entry.entity === 'notebooks' ? ['title', 'order'] : entry.entity === 'sections' ? ['title', 'color', 'order', 'notebookId'] : ['title', 'order', 'sectionId', 'camera', 'background'];
+  if (entry.entity === 'pages') return canonicalContentVersion('pages', snapshot.record, snapshot.elements) === canonicalContentVersion('pages', remote, cloudElementsFor(cloud, entry.entityId)) ? 'acknowledged' : 'conflict';
+  const fields = entry.entity === 'notebooks' ? ['title', 'order'] : ['title', 'color', 'order', 'notebookId'];
   if (!sameFields(snapshot.record, remote, fields)) return 'conflict';
-  if (entry.entity !== 'pages') return 'acknowledged';
-  const localElements = [...(snapshot.elements?.strokes || []), ...(snapshot.elements?.shapes || []), ...(snapshot.elements?.textBlocks || [])];
-  const remoteElements = cloud.elements.filter(element => element.pageId === entry.entityId && !element.deletedAt).map(element => element.data);
-  if (localElements.length !== remoteElements.length) return 'conflict';
-  const remoteById = new Map(remoteElements.map(record => [record.id, record]));
-  return localElements.every(record => remoteById.has(record.id) && stable(record) === stable(remoteById.get(record.id))) ? 'acknowledged' : 'conflict';
+  return 'acknowledged';
 }

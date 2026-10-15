@@ -2,7 +2,7 @@ import type { IDBPDatabase } from 'idb';
 import type { OneNoteDB, ImageAssetRecord } from '../../db/idb';
 import type { CloudPullResult, ISyncProvider } from './types';
 import type { SyncBinding } from './outboxContext';
-import { canonicalVersion, cloudElementsFor, versionHash, stable, assetIds } from './protocol.mjs';
+import { canonicalContentVersion, contentVersionHash, cloudElementsFor, versionHash, stable, assetIds } from './protocol.mjs';
 import { applyCloudPull } from './safePull';
 import type { PullRevisions } from './safePull';
 import { revisionKey } from './revisionState';
@@ -26,15 +26,19 @@ export async function applyVersionedPull(db: IDBPDatabase<OneNoteDB>, cloud: Clo
       const remoteElements = entity === 'pages' ? cloudElementsFor(cloud, remote.id) : undefined;
       const actual = await versionHash(entity, row, localElements);
       const incoming = await versionHash(entity, remote, remoteElements);
+      const sameContent = canonicalContentVersion(entity, row, localElements) === canonicalContentVersion(entity, remote, remoteElements);
+      const actualContent = await contentVersionHash(entity, row, localElements);
+      const incomingContent = await contentVersionHash(entity, remote, remoteElements);
       const state = states.get(revisionKey(binding, entity as OutboxEntity, remote.id));
       const protectedLocal = stateRows.some(r => r.provider === binding.provider && r.userId === binding.userId && r.entity === entity && r.entityId === remote.id) || entity === 'pages' && protectedPages.has(remote.id);
       const bothDeleted = (!row || !!('deletedAt' in row && row.deletedAt)) && !!remote.deletedAt;
-      let conflict = !bothDeleted && !!row && actual !== incoming && (protectedLocal || state?.conflict || state?.base !== actual);
-      if (entity === 'pages' && row && !remote.deletedAt && actual !== incoming && Object.values(localElements || {}).some(rows => rows.length) && !cloud.completePageIds?.includes(remote.id)) conflict = true;
+      const localChanged = state?.contentBase !== undefined ? state.contentBase !== actualContent : state?.base !== actual;
+      let conflict = !bothDeleted && !!row && !sameContent && (protectedLocal || state?.conflict || localChanged);
+      if (entity === 'pages' && row && !remote.deletedAt && !sameContent && Object.values(localElements || {}).some(rows => rows.length) && !cloud.completePageIds?.includes(remote.id)) conflict = true;
       // Never bypass a known unsent operation, including metadata-only changes.
       if (protectedLocal && !bothDeleted) options.protected.add(`${entity}:${remote.id}`);
       if (!conflict && (!protectedLocal || bothDeleted)) {
-        if (actual === incoming) options.unchanged.add(`${entity}:${remote.id}`);
+        if (sameContent) options.unchanged.add(`${entity}:${remote.id}`);
         else options.accepted.add(`${entity}:${remote.id}`);
       }
       if (entity === 'pages' && !conflict && !protectedLocal && !remote.deletedAt && provider.downloadAsset) {
@@ -48,7 +52,7 @@ export async function applyVersionedPull(db: IDBPDatabase<OneNoteDB>, cloud: Clo
         }
       }
       if (conflict) { options.protected.add(`${entity}:${remote.id}`); if (entity === 'pages') protectedPages.add(remote.id); }
-      options.bases.push({ entity: entity as OutboxEntity, id: remote.id, hash: incoming, canonical: canonicalVersion(entity, remote, remoteElements), conflict });
+      options.bases.push({ entity: entity as OutboxEntity, id: remote.id, hash: incoming, contentHash: incomingContent, canonical: canonicalContentVersion(entity, remote, remoteElements), conflict });
     }
   }
   const result = await applyCloudPull(db, cloud, protectedPages, isCurrent, options);
