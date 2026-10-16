@@ -1,6 +1,6 @@
 import { useShallow } from 'zustand/react/shallow';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import katex from 'katex';
+import { renderFormulaInto } from '../../utils/formulaRendering';
 import { GripHorizontal, X } from 'lucide-react';
 import { TextBlock } from '../../types/textblock';
 import { useCanvasStore } from '../../store/useCanvasStore';
@@ -95,7 +95,7 @@ export const TextBlockView = React.memo(function TextBlockView({
     return () => {
       if (ro) ro.disconnect();
     };
-  }, [block.id, block.contentHTML, block.width, setTextBlockHeight]);
+  }, [block.id, setTextBlockHeight]);
 
   // Авто-фокус при создании пустого блока
   useEffect(() => {
@@ -121,10 +121,7 @@ export const TextBlockView = React.memo(function TextBlockView({
       const latex = el.getAttribute('data-latex');
       if (latex) {
         try {
-          el.innerHTML = katex.renderToString(latex, {
-            displayMode: true,
-            throwOnError: false,
-          });
+          renderFormulaInto(el, latex);
         } catch {
           // fallback
         }
@@ -278,10 +275,7 @@ export const TextBlockView = React.memo(function TextBlockView({
       if (updatedLatex !== null && updatedLatex.trim()) {
         target.setAttribute('data-latex', updatedLatex.trim());
         try {
-          target.innerHTML = katex.renderToString(updatedLatex.trim(), {
-            displayMode: true,
-            throwOnError: false,
-          });
+          renderFormulaInto(target, updatedLatex.trim());
         } catch {
           target.innerText = `$${updatedLatex}$`;
         }

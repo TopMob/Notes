@@ -276,7 +276,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     const pageId = targetPageId || get().currentPageId;
     if (!pageId) return;
 
-    if (get().saveStatus !== 'error') set({ saveStatus: 'unsaved' });
+    if (get().saveStatus !== 'error' && get().saveStatus !== 'unsaved') set({ saveStatus: 'unsaved' });
 
     const existingTimer = saveTimers.get(pageId);
     if (existingTimer) {
@@ -374,7 +374,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     textBlocks: [],
     textBlockHeights: {},
     setTextBlockHeight: (id, height) =>
-      set((state) => ({
+      set((state) => state.textBlockHeights[id] === height ? state : ({
         textBlockHeights: { ...state.textBlockHeights, [id]: height },
       })),
 
@@ -401,8 +401,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     setShapeWidth: (shapeWidth) => set({ shapeWidth }),
 
     setCamera: (cameraOrFn) => {
+      const previous = get().camera;
+      const next = typeof cameraOrFn === 'function' ? cameraOrFn(previous) : cameraOrFn;
+      if (previous.x === next.x && previous.y === next.y && previous.zoom === next.zoom) return;
       set((state) => {
-        const newCamera = typeof cameraOrFn === 'function' ? cameraOrFn(state.camera) : cameraOrFn;
+        const newCamera = next;
         const pageId = state.currentPageId;
         if (pageId) {
           const d = getOrCreateDirty(pageId);
@@ -874,6 +877,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     updateTextBlock: (id, updates) => {
+      const previous = get().textBlocks.find(block => block.id === id);
+      if (!previous || (Object.keys(updates) as (keyof TextBlock)[]).every(key => previous[key] === updates[key])) return;
       const pageId = get().currentPageId;
       let updatedBlock: TextBlock | undefined;
       set((state) => {
@@ -969,6 +974,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     clearSelection: () => {
+      const state = get();
+      if (!state.selectedStrokeIds.length && !state.selectedShapeIds.length && !state.selectedTextBlockIds.length) return;
       set({
         selectedStrokeIds: [],
         selectedShapeIds: [],

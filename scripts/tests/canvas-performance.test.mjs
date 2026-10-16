@@ -3,6 +3,37 @@ import assert from 'node:assert/strict';
 import { getStroke } from 'perfect-freehand';
 import { loadTs } from './helpers/load-ts.mjs';
 
+test('unchanged formulas reuse HTML without replacing their DOM; edits invalidate the cache', () => {
+  let calls = 0, writes = 0, html = '';
+  const {renderFormulaInto} = loadTs('src/utils/formulaRendering.ts', {
+    katex: {default:{renderToString:latex=>{calls++;return `<span>${latex}</span>`;}}},
+  });
+  const element = { get innerHTML(){return html;}, set innerHTML(value){writes++;html=value;} };
+  renderFormulaInto(element,'x^2'); renderFormulaInto(element,'x^2');
+  assert.equal(calls,1); assert.equal(writes,1);
+  const another = {innerHTML:''}; renderFormulaInto(another,'x^2'); assert.equal(calls,1);
+  renderFormulaInto(element,'x^3'); assert.equal(calls,2); assert.equal(html,'<span>x^3</span>');
+});
+
+test('no-op camera, text and height updates publish nothing and create no dirty edits', async () => {
+  globalThis.localStorage = {getItem:()=>null,setItem(){}};
+  const writes=[];
+  const {useCanvasStore:store}=loadTs('src/store/useCanvasStore.ts',{
+    '../db/storage':{savePageDiff:async(...args)=>writes.push(args),savePageFull:async()=>{},loadPageData:async()=>({})},
+  });
+  const block={id:'t',pageId:'p',x:1,y:2,width:400,contentHTML:'Keep',zIndex:10};
+  store.setState({currentPageId:'p',textBlocks:[block],textBlockHeights:{t:60}});
+  const revision=store.getState().getEditRevision(); let notifications=0;
+  store.subscribe(()=>notifications++);
+  store.getState().setCamera({...store.getState().camera});
+  store.getState().setTextBlockHeight('t',60);
+  store.getState().updateTextBlock('t',{x:1,contentHTML:'Keep'});
+  store.getState().updateTextBlock('missing',{x:100});
+  store.getState().clearSelection();
+  assert.equal(notifications,0); assert.equal(store.getState().getEditRevision(),revision);
+  await store.getState().flushAllSaves(); assert.equal(writes.length,0);
+});
+
 test('asset leases protect shared images, release URLs and handle late loads after unmount', async () => {
   let complete;
   const { assetManager: assets } = loadTs('src/services/assets/assetManager.ts', {
