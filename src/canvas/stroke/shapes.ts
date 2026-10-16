@@ -16,6 +16,14 @@ function distToSegment(p: { x: number; y: number }, a: { x: number; y: number },
   return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
 }
 
+function axisGeometry(shape: ShapeObject) {
+  const left = Math.min(shape.anchor.x, shape.end.x), right = Math.max(shape.anchor.x, shape.end.x);
+  const top = Math.min(shape.anchor.y, shape.end.y), bottom = Math.max(shape.anchor.y, shape.end.y);
+  // Existing notes keep their original origin and alignment with drawn graphs.
+  const four = shape.axisMode === 'four-quadrant';
+  return { left, right, top, bottom, originX: four ? (left + right) / 2 : left, originY: four ? (top + bottom) / 2 : bottom };
+}
+
 export function isShapeHitByEraser(shape: ShapeObject, center: { x: number; y: number }, radius: number): boolean {
   const effRadius = radius + (shape.style.width || 2) / 2;
   const { anchor, end, type } = shape;
@@ -60,12 +68,9 @@ export function isShapeHitByEraser(shape: ShapeObject, center: { x: number; y: n
   }
 
   if (type === 'axis') {
-    const originX = Math.min(anchor.x, end.x);
-    const originY = Math.max(anchor.y, end.y);
-    const topY = Math.min(anchor.y, end.y);
-    const rightX = Math.max(anchor.x, end.x);
-    const dY = distToSegment(center, { x: originX, y: originY }, { x: originX, y: topY });
-    const dX = distToSegment(center, { x: originX, y: originY }, { x: rightX, y: originY });
+    const { left, right, top, bottom, originX, originY } = axisGeometry(shape);
+    const dY = distToSegment(center, { x: originX, y: bottom }, { x: originX, y: top });
+    const dX = distToSegment(center, { x: left, y: originY }, { x: right, y: originY });
     return Math.min(dY, dX) <= effRadius;
   }
 
@@ -176,14 +181,11 @@ export function drawShapeToCanvas(ctx: CanvasRenderingContext2D, shape: ShapeObj
 
     case 'axis': {
       // Координатные оси X и Y
-      const originX = Math.min(anchor.x, end.x);
-      const originY = Math.max(anchor.y, end.y);
-      const topY = Math.min(anchor.y, end.y);
-      const rightX = Math.max(anchor.x, end.x);
+      const { left, right: rightX, top: topY, bottom, originX, originY } = axisGeometry(shape);
 
       // Ось Y (вверх)
       ctx.beginPath();
-      ctx.moveTo(originX, originY);
+      ctx.moveTo(originX, bottom);
       ctx.lineTo(originX, topY);
       ctx.stroke();
 
@@ -198,7 +200,7 @@ export function drawShapeToCanvas(ctx: CanvasRenderingContext2D, shape: ShapeObj
 
       // Ось X (вправо)
       ctx.beginPath();
-      ctx.moveTo(originX, originY);
+      ctx.moveTo(left, originY);
       ctx.lineTo(rightX, originY);
       ctx.stroke();
 

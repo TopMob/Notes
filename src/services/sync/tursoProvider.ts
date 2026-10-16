@@ -27,7 +27,24 @@ export class TursoProvider implements ISyncProvider {
     } finally { clearTimeout(timer); }
   }
   async pullAll(_userId: string): Promise<CloudPullResult> {
-    const response = await (await this.request({ action: 'pull', transport: 'chunks-v1' })).json();
+    return this.readPull();
+  }
+  async getSyncToken(_userId: string): Promise<string> {
+    const { token } = await (await this.request({ action: 'clock' })).json();
+    if (typeof token !== 'string' || !/^[a-f0-9]{32}$/.test(token)) throw new Error('Некорректная отметка изменений облака');
+    return token;
+  }
+  async pullEntities(_userId: string, entities: { entity: 'notebooks' | 'sections' | 'pages'; id: string }[]): Promise<CloudPullResult> {
+    const result: CloudPullResult = { notebooks: [], sections: [], pages: [], elements: [], completePageIds: [], guarded: true };
+    for (let offset = 0; offset < entities.length; offset += 256) {
+      const batch = await this.readPull(entities.slice(offset, offset + 256));
+      for (const table of ['notebooks', 'sections', 'pages', 'elements'] as const) (result[table] as any[]).push(...batch[table]);
+      result.completePageIds!.push(...batch.completePageIds || []);
+    }
+    return result;
+  }
+  private async readPull(entities?: { entity: 'notebooks' | 'sections' | 'pages'; id: string }[]): Promise<CloudPullResult> {
+    const response = await (await this.request({ action: 'pull', transport: 'chunks-v1', ...(entities ? { entities } : {}) })).json();
     if (response.transfer) {
       const first = response.transfer;
       if (typeof first.id !== 'string' || !/^[a-f0-9]{64}$/.test(first.hash || '') || !Number.isInteger(first.total) || first.total < 1 || first.total > 256) throw new Error('Некорректный снимок облака');
@@ -49,7 +66,7 @@ export class TursoProvider implements ISyncProvider {
   private async payloadHash(payload: string): Promise<string> {
     return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload)))].map(n => n.toString(16).padStart(2, '0')).join('');
   }
-  async commit(_userId: string, operation: GuardedOperation): Promise<{ revision: string | null }> {
+  async commit(_userId: string, operation: GuardedOperation): Promise<{ revision: string | null; previousSyncToken?: string; syncToken?: string }> {
     const payload = await compressJson(operation);
     if (new TextEncoder().encode(JSON.stringify({ action: 'commit', payload })).length <= 2 * 1024 * 1024) return (await this.request({ action: 'commit', payload })).json();
     const size = 256 * 1024, total = Math.ceil(payload.length / size), id = crypto.randomUUID();

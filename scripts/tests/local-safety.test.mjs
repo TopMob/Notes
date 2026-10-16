@@ -195,3 +195,21 @@ test('a stroke still held by the pen protects its page from incoming sync before
   store.getState().endInteraction();
   assert.deepEqual(store.getState().getUnsavedPageIds(), []);
 });
+
+test('four-quadrant axes render and erase on both sides of the origin, including reversed drags', () => {
+  const { drawShapeToCanvas, isShapeHitByEraser, computeShapeBounds } = loadModule('src/canvas/stroke/shapes.ts');
+  const anchor = { x: 0, y: 0 }, end = { x: 200, y: 160 };
+  const shape = { id: 'axis', pageId: 'p', type: 'axis', axisMode: 'four-quadrant', anchor, end, style: { color: 'black', width: 2 }, bounds: computeShapeBounds(anchor, end) };
+  const lines = []; let path;
+  const ctx = { save() {}, restore() {}, setLineDash() {}, beginPath() { path = []; }, moveTo(x, y) { path.push([x, y]); }, lineTo(x, y) { path.push([x, y]); }, stroke() { lines.push(path); }, closePath() {}, fill() {} };
+  drawShapeToCanvas(ctx, shape);
+  assert.deepEqual(lines, [[[100, 160], [100, 0]], [[0, 80], [200, 80]]]);
+  for (const center of [{ x: 25, y: 80 }, { x: 175, y: 80 }, { x: 100, y: 25 }, { x: 100, y: 140 }]) assert.ok(isShapeHitByEraser(shape, center, 2));
+  assert.equal(isShapeHitByEraser(shape, { x: 25, y: 25 }, 2), false);
+  lines.length = 0;
+  drawShapeToCanvas(ctx, { ...shape, anchor: end, end: anchor });
+  assert.deepEqual(lines, [[[100, 160], [100, 0]], [[0, 80], [200, 80]]]);
+  lines.length = 0;
+  drawShapeToCanvas(ctx, { ...shape, axisMode: undefined });
+  assert.deepEqual(lines, [[[0, 160], [0, 0]], [[0, 160], [200, 160]]], 'old graph origins must stay aligned');
+});

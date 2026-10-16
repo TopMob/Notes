@@ -1,6 +1,7 @@
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { versionHash, assetIds, portableElements } from '../src/services/sync/protocol.mjs';
+import { getSyncClock, readSyncClock } from './sync-clock.mjs';
 
 export class SyncError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -38,8 +39,21 @@ export function elementsFromRows(rows) {
   return result;
 }
 export async function pull(client, userId) {
-  const results = await client.batch(['notebooks', 'sections', 'pages', 'page_elements'].map(table => ({ sql: `SELECT * FROM ${table} WHERE user_id = ?`, args: [userId] })), 'read');
-  return { notebooks: results[0].rows.map(r => record('notebooks', r)), sections: results[1].rows.map(r => record('sections', r)), pages: results[2].rows.map(r => record('pages', r)), elements: elementsFromRows(results[3].rows), guarded: true, completePageIds: results[3].rows.filter(r => r.type === 'bundle' && !r.deleted_at).map(r => String(r.page_id)) };
+  await getSyncClock(client, userId);
+  const queries = ['notebooks', 'sections', 'pages', 'page_elements'].map(table => ({ sql: `SELECT * FROM ${table} WHERE user_id = ?`, args: [userId] }));
+  return pullResult(await client.batch([...queries, { sql: 'SELECT token FROM notes_sync_clock WHERE user_id=?', args: [userId] }], 'read'));
+}
+function pullResult(results) {
+  return { notebooks: results[0].rows.map(r => record('notebooks', r)), sections: results[1].rows.map(r => record('sections', r)), pages: results[2].rows.map(r => record('pages', r)), elements: elementsFromRows(results[3].rows), guarded: true, completePageIds: results[3].rows.filter(r => r.type === 'bundle' && !r.deleted_at).map(r => String(r.page_id)), syncToken: results[4].rows[0]?.token };
+}
+export async function pullEntities(client, userId, entities) {
+  if (!Array.isArray(entities) || entities.length > 256 || entities.some(row => !row || !tables.has(row.entity) || !validId(row.id))) throw new SyncError(400, 'Некорректный список заметок');
+  await getSyncClock(client, userId);
+  const queries = ['notebooks', 'sections', 'pages', 'page_elements'].map(table => {
+    const ids = [...new Set(entities.filter(row => row.entity === (table === 'page_elements' ? 'pages' : table)).map(row => row.id))];
+    return { sql: `SELECT * FROM ${table} WHERE user_id=? AND ${table === 'page_elements' ? 'page_id' : 'id'} IN (${ids.map(() => '?').join(',') || 'NULL'})`, args: [userId, ...ids] };
+  });
+  return pullResult(await client.batch([...queries, { sql: 'SELECT token FROM notes_sync_clock WHERE user_id=?', args: [userId] }], 'read'));
 }
 function validId(id) { return typeof id === 'string' && id.length > 0 && id.length <= 300; }
 function validateWrite(input) {
@@ -77,17 +91,19 @@ async function current(tx, userId, entity, id) {
 }
 export async function commit(client, userId, input) {
   validateWrite(input);
+  await getSyncClock(client, userId);
   const elements = input.entity === 'pages' ? portableElements(input.elements) : undefined;
   // Compression and validation precede the write lock.
   const packed = elements ? `gz:${gzipSync(JSON.stringify({ schema_version: 2, ...elements })).toString('base64')}` : null;
   const tx = await client.transaction('write');
   try {
+    const previousSyncToken = await readSyncClock(tx, userId);
     const existing = await current(tx, userId, input.entity, input.id);
     const actual = await versionHash(input.entity, existing.record, existing.elements);
     const desiredRecord = input.action === 'delete' ? existing.record && { ...existing.record, deletedAt: 1 } : { ...input.record, deletedAt: null };
     const desired = await versionHash(input.entity, desiredRecord, elements);
     // A lost response may be retried without rewriting already committed content.
-    if (actual === desired) { await tx.commit(); return { revision: actual }; }
+    if (actual === desired) { await tx.commit(); return { revision: actual, previousSyncToken, syncToken: previousSyncToken }; }
     if (actual !== input.expected) throw new SyncError(409, 'Облако изменилось на другом устройстве. Обе версии сохранены; выберите вариант в настройках синхронизации.');
     const now = Date.now();
     if (input.action === 'delete') {
@@ -114,7 +130,8 @@ export async function commit(client, userId, input) {
     }
     const final = await current(tx, userId, input.entity, input.id);
     const revision = await versionHash(input.entity, final.record, final.elements);
-    await tx.commit(); return { revision };
+    const syncToken = await readSyncClock(tx, userId);
+    await tx.commit(); return { revision, previousSyncToken, syncToken };
   } finally { tx.close(); }
 }
 const assetSetup = new WeakMap();

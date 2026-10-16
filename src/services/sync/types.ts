@@ -20,6 +20,7 @@ export interface SyncPayload {
 }
 
 export interface CloudPullResult {
+  syncToken?: string;
   guarded?: boolean;
   completePageIds?: string[];
   notebooks: (Notebook & { updatedAt: number; deletedAt?: number | null })[];
@@ -52,7 +53,9 @@ export interface SyncStats {
 
 export interface ISyncProvider {
   guarded?: boolean;
-  commit?(userId: string, operation: GuardedOperation): Promise<{ revision: string | null }>;
+  commit?(userId: string, operation: GuardedOperation): Promise<{ revision: string | null; previousSyncToken?: string; syncToken?: string }>;
+  getSyncToken?(userId: string): Promise<string>;
+  pullEntities?(userId: string, entities: { entity: 'notebooks' | 'sections' | 'pages'; id: string }[]): Promise<CloudPullResult>;
   uploadAsset?(id: string, blob: Blob): Promise<void>;
   downloadAsset?(id: string): Promise<Blob>;
   name: SyncProviderType;

@@ -455,3 +455,67 @@ test('blocked page creation preserves the previous active page and canvas', asyn
   assert.equal(canvas.currentPageId, 'p');
 });
 
+function checkpointFixture() {
+  let token = 'a'.repeat(32), pulls = 0, scopes = 0, commits = 0, clocks = 0;
+  const provider = { name: 'turso', guarded: true,
+    getSyncToken: async () => { clocks++; return token; },
+    pullAll: async () => { pulls++; return { ...empty(), syncToken: token }; },
+    pullEntities: async (_user, refs) => { scopes++; assert.equal(refs.length, 1); return empty(); },
+    commit: async () => { commits++; const previousSyncToken = token; token = 'b'.repeat(32); return { revision: 'c'.repeat(64), previousSyncToken, syncToken: token }; },
+  };
+  const db = { getAll: async () => [], get: async () => undefined, transaction: () => ({ done: Promise.resolve() }) };
+  const fixture = engineFixture(provider, {}, db, { './revisionPull': { applyVersionedPull: async () => ({ pulled: { notebooks: 0, sections: 0, pages: 0, elements: 0 }, conflicts: new Set(), changedPageIds: new Set() }) } });
+  fixture.useSyncStore.setState({ userId: 'user' });
+  return { ...fixture, db, provider, counts: () => ({ pulls, scopes, commits, clocks }), changeRemote: () => { token = 'd'.repeat(32); } };
+}
+
+test('unchanged manual sync checks a short marker after its first full verified pull', async () => {
+  const f = checkpointFixture();
+  await f.syncEngine.syncAll();
+  await f.syncEngine.syncAll();
+  assert.deepEqual(f.counts(), { pulls: 1, scopes: 0, commits: 0, clocks: 1 });
+  f.changeRemote();
+  await f.syncEngine.syncAll();
+  assert.equal(f.counts().pulls, 2);
+});
+
+test('own queued changes use scoped reads and advance a verified checkpoint without pulling all notebooks', async () => {
+  const f = checkpointFixture();
+  await f.syncEngine.syncAll();
+  f.syncEngine.notifyChange({ notebooks: [{ id: 'n', title: 'New', createdAt: 1, order: 0 }] });
+  await f.syncEngine.syncAll();
+  assert.deepEqual(f.counts(), { pulls: 1, scopes: 1, commits: 1, clocks: 1 });
+});
+
+test('another-device edit between queue commits invalidates the short-check checkpoint', async () => {
+  const f = checkpointFixture();
+  await f.syncEngine.syncAll();
+  f.changeRemote();
+  f.syncEngine.notifyChange({ notebooks: [{ id: 'n', title: 'New', createdAt: 1, order: 0 }] });
+  await f.syncEngine.syncAll();
+  assert.equal(f.counts().pulls, 2);
+  assert.equal(f.counts().commits, 1);
+});
+
+test('pending conflict flags prevent an unchanged-cloud shortcut', async () => {
+  const f = checkpointFixture();
+  await f.syncEngine.syncAll();
+  f.db.getAll = async table => table === 'syncOutbox' ? [{ provider: 'state', bindingProvider: 'turso', userId: 'user', conflict: true }] : [];
+  await f.syncEngine.syncAll();
+  assert.equal(f.counts().pulls, 2);
+});
+
+test('restoring local data in another tab invalidates session checkpoints', async () => {
+  const original = globalThis.localStorage, values = new Map();
+  globalThis.localStorage = { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) };
+  try {
+    const f = checkpointFixture();
+    await f.syncEngine.syncAll();
+    const otherTab = checkpointFixture();
+    otherTab.syncEngine.invalidateCloudCheckpoints();
+    await f.syncEngine.syncAll();
+    assert.equal(f.counts().pulls, 2);
+    assert.equal(f.counts().clocks, 0);
+  } finally { globalThis.localStorage = original; }
+});
+

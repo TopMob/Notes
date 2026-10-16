@@ -6,7 +6,8 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { SignJWT, generateKeyPair } from 'jose';
 import { authenticate, clerkIssuer } from '../../server/sync-auth.mjs';
-import { commit, pull, ensureAssets, putAsset, completeAsset, assetManifest, pack, decode } from '../../server/turso-sync.mjs';
+import { commit, pull, pullEntities, ensureAssets, putAsset, completeAsset, assetManifest, pack, decode } from '../../server/turso-sync.mjs';
+import { getSyncClock } from '../../server/sync-clock.mjs';
 import { versionHash, cloudElementsFor } from '../../src/services/sync/protocol.mjs';
 import { createSnapshotTransfer, readSnapshotPart, uploadCommitPart, readCommitTransfer, releaseTransfer, TRANSFER_PART_SIZE } from '../../server/sync-transfer.mjs';
 
@@ -43,7 +44,10 @@ test('server page commit is atomic, conditional and retryable after a lost respo
     const next = { ...page, title: 'Device A' };
     const request = { entity: 'pages', id: 'p', action: 'put', expected: first.revision, record: next, elements };
     const committed = await commit(client, 'u', request);
-    assert.deepEqual(await commit(client, 'u', request), committed);
+    const retried = await commit(client, 'u', request);
+    assert.equal(retried.revision, committed.revision);
+    assert.equal(retried.syncToken, committed.syncToken);
+    assert.equal(retried.previousSyncToken, committed.syncToken);
     await assert.rejects(commit(client, 'u', { ...request, record: { ...page, title: 'Device B' } }), e => e.status === 409);
     const cloud = await pull(client, 'u');
     assert.equal(cloud.pages[0].title, 'Device A'); assert.deepEqual(cloudElementsFor(cloud, 'p'), elements);
@@ -51,6 +55,54 @@ test('server page commit is atomic, conditional and retryable after a lost respo
     await ensureAssets(client);
     await assert.rejects(commit(client, 'u', { ...request, expected: committed.revision, record: { ...next, title: 'Must rollback' }, elements: missingImage }), e => e.status === 409);
     assert.equal((await pull(client, 'u')).pages[0].title, 'Device A');
+  } finally { client.close(); }
+});
+
+test('account change marker tracks same-count edits and deletions, stays stable on reads, and is owner scoped', async () => {
+  const { client, page, elements } = await fixture();
+  try {
+    const initial = await getSyncClock(client, 'u'), other = await getSyncClock(client, 'other');
+    assert.equal(await getSyncClock(client, 'u'), initial);
+    const saved = await commit(client, 'u', { entity: 'pages', id: 'p', action: 'put', expected: null, record: page, elements });
+    assert.equal(saved.previousSyncToken, initial);
+    assert.notEqual(saved.syncToken, initial);
+    assert.equal((await pull(client, 'u')).syncToken, saved.syncToken);
+    await client.execute({ sql: 'UPDATE pages SET title=? WHERE user_id=? AND id=?', args: ['Same counts, different title', 'u', 'p'] });
+    const edited = await getSyncClock(client, 'u');
+    assert.notEqual(edited, saved.syncToken);
+    await client.execute({ sql: 'UPDATE page_elements SET updated_at=updated_at+1 WHERE user_id=?', args: ['u'] });
+    const strokeEdit = await getSyncClock(client, 'u');
+    assert.notEqual(strokeEdit, edited);
+    await client.execute({ sql: 'DELETE FROM page_elements WHERE user_id=?', args: ['u'] });
+    assert.notEqual(await getSyncClock(client, 'u'), strokeEdit);
+    assert.equal(await getSyncClock(client, 'other'), other);
+    const beforeRollback = await getSyncClock(client, 'u');
+    const tx = await client.transaction('write');
+    await tx.execute({ sql: 'UPDATE notebooks SET title=? WHERE user_id=?', args: ['Rolled back', 'u'] });
+    await tx.rollback(); tx.close();
+    assert.equal(await getSyncClock(client, 'u'), beforeRollback);
+    await client.execute({ sql: 'UPDATE notebooks SET user_id=? WHERE id=?', args: ['other', 'n'] });
+    assert.notEqual(await getSyncClock(client, 'u'), beforeRollback);
+    assert.notEqual(await getSyncClock(client, 'other'), other);
+  } finally { client.close(); }
+});
+
+test('scoped queue reads return only requested notes including orphan canvases, never another owner', async () => {
+  const { client, page, elements } = await fixture();
+  try {
+    await commit(client, 'u', { entity: 'pages', id: 'p', action: 'put', expected: null, record: page, elements });
+    const scoped = await pullEntities(client, 'u', [{ entity: 'pages', id: 'p' }]);
+    assert.equal(scoped.pages.length, 1);
+    assert.equal(scoped.notebooks.length, 0);
+    assert.equal(scoped.sections.length, 0);
+    assert.deepEqual(cloudElementsFor(scoped, 'p'), elements);
+    assert.deepEqual(scoped.completePageIds, ['p']);
+    assert.equal((await pullEntities(client, 'other', [{ entity: 'pages', id: 'p' }])).elements.length, 0);
+    await client.execute({ sql: 'DELETE FROM pages WHERE id=? AND user_id=?', args: ['p', 'u'] });
+    const orphan = await pullEntities(client, 'u', [{ entity: 'pages', id: 'p' }]);
+    assert.equal(orphan.pages.length, 0);
+    assert.deepEqual(cloudElementsFor(orphan, 'p'), elements);
+    await assert.rejects(pullEntities(client, 'u', [{ entity: 'pages; DROP TABLE pages', id: 'p' }]), error => error.status === 400);
   } finally { client.close(); }
 });
 test('server refuses cross-owner IDs and never cascades an unchecked deletion', async () => {

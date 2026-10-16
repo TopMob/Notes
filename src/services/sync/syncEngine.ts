@@ -34,6 +34,8 @@ interface SyncStoreState {
 
 const STORAGE_PROVIDER_KEY = 'onenote_sync_provider';
 const STORAGE_LAST_SYNCED_KEY = 'onenote_last_synced_at';
+const LOCAL_SYNC_EPOCH_KEY = 'onenote_sync_local_epoch';
+const localSyncEpoch = () => localStorage.getItem(LOCAL_SYNC_EPOCH_KEY) || '';
 const isVersionConflictMessage = (message: string | null) => !!message && [
   'Различаются версии ', 'Есть разные версии заметок.',
   'Облако изменилось во время отправки.',
@@ -75,6 +77,14 @@ export const useSyncStore = create<SyncStoreState>((set) => ({
 }));
 
 class SyncEngine {
+  // Session-only: a reload or a cleared local database always requires a full check.
+  private cloudCheckpoints = new Map<string, { token: string; localEpoch: string }>();
+  public invalidateCloudCheckpoints() {
+    this.cloudCheckpoints.clear();
+    this.changeRevision++;
+    // Other tabs sharing this database must also discard their short-check cache.
+    try { localStorage.setItem(LOCAL_SYNC_EPOCH_KEY, crypto.randomUUID()); } catch {}
+  }
   private operationTail: Promise<void> = Promise.resolve();
   private fullSyncPromise: Promise<SyncStats> | null = null;
   private changeRevision = 0;
@@ -245,6 +255,10 @@ class SyncEngine {
     try {
       const result = await provider.commit!(userId, { entity: entry.entity, id: entry.entityId, action: deleting ? 'delete' : 'put', expected: expected ?? null, record: snapshot.record, elements: snapshot.elements || undefined });
       assertContext();
+      const checkpointKey = JSON.stringify([provider.name, userId]);
+      const previousCheckpoint = this.cloudCheckpoints.get(checkpointKey);
+      if (result.syncToken && previousCheckpoint?.localEpoch === localSyncEpoch() && result.previousSyncToken === previousCheckpoint.token) this.cloudCheckpoints.set(checkpointKey, { token: result.syncToken, localEpoch: previousCheckpoint.localEpoch });
+      else this.cloudCheckpoints.delete(checkpointKey);
       await acknowledgeOutbox(entry, result.revision, desiredContent);
       const rows = cloud[entry.entity] as any[];
       const next = deleting ? remote && { ...remote, deletedAt: Date.now() } : { ...snapshot.record, deletedAt: null, updatedAt: Date.now() };
@@ -301,7 +315,9 @@ class SyncEngine {
       const entries = await pendingOutbox(binding);
       if (!entries.length) { this.pendingPageElementIds.clear(); return true; }
       useSyncStore.getState().setStatus('syncing');
-      const restoredCloud = provider.guarded || entries.some(entry => entry.sessionId !== outboxSessionId) ? await provider.pullAll(userId) : null;
+      const restoredCloud = provider.guarded && provider.pullEntities
+        ? await provider.pullEntities(userId, entries.map(entry => ({ entity: entry.entity, id: entry.entityId })))
+        : provider.guarded || entries.some(entry => entry.sessionId !== outboxSessionId) ? await provider.pullAll(userId) : null;
       if (restoredCloud) validateCloudPull(restoredCloud);
       const assertContext = () => {
         if (useSyncStore.getState().userId !== userId || this.getActiveProvider() !== provider || !isSyncOwner(userId)) throw new Error('Аккаунт или провайдер изменился; очередь сохранена для повтора.');
@@ -404,6 +420,20 @@ class SyncEngine {
       const localSections = await db.getAll('sections');
       const localPages = await db.getAll('pages');
 
+      const checkpointKey = JSON.stringify([provider.name, userId]);
+      const checkpoint = this.cloudCheckpoints.get(checkpointKey);
+      if (provider.getSyncToken && checkpoint && checkpoint.localEpoch === localSyncEpoch()) {
+        const token = await provider.getSyncToken(userId);
+        const states = await db.getAll('syncOutbox');
+        const unresolved = states.some(row => row.provider === 'state' && row.bindingProvider === provider.name && row.userId === userId && row.conflict || row.provider === provider.name && row.userId === userId);
+        if (snapshotRevision !== this.changeRevision || snapshotEdits !== useCanvasStore.getState().getEditRevision() || useSyncStore.getState().userId !== userId || this.getActiveProvider() !== provider) throw new Error('Во время проверки облака появились правки или изменился аккаунт. Повторите синхронизацию.');
+        if (token === checkpoint.token && checkpoint.localEpoch === localSyncEpoch() && !unresolved && !useCanvasStore.getState().getUnsavedPageIds().length) {
+          useSyncStore.getState().setError(null);
+          useSyncStore.getState().setLastSyncedAt(Date.now());
+          return { pushed: { notebooks: 0, sections: 0, pages: 0, elements: 0 }, pulled: { notebooks: 0, sections: 0, pages: 0, elements: 0 } };
+        }
+      }
+
       // 3. Получаем все данные из облака
       let cloudData = await provider.pullAll(userId);
       validateCloudPull(cloudData);
@@ -445,9 +475,11 @@ class SyncEngine {
           }
         }
         await tx.done;
-        if (!await this.flushPendingChangesNow()) throw new Error(useSyncStore.getState().errorMessage || 'Очередь сохранена; отправка приостановлена');
-        cloudData = await provider.pullAll(userId);
-        validateCloudPull(cloudData);
+        if (pushedNotebooks || pushedSections || pushedPages) {
+          if (!await this.flushPendingChangesNow()) throw new Error(useSyncStore.getState().errorMessage || 'Очередь сохранена; отправка приостановлена');
+          cloudData = await provider.pullAll(userId);
+          validateCloudPull(cloudData);
+        }
       } else {
       // А) Блокноты
       const nbsToPush: Notebook[] = [];
@@ -562,6 +594,8 @@ class SyncEngine {
 
       if (result.conflicts.size) useSyncStore.getState().setError(`Различаются версии ${result.conflicts.size} страниц. Локальные рисунки и текст сохранены; автоматическая замена и облачное удаление этих страниц приостановлены.`);
       else useSyncStore.getState().setLastSyncedAt(Date.now());
+      if (cloudData.syncToken && !result.conflicts.size && !protectedPageIds.size) this.cloudCheckpoints.set(checkpointKey, { token: cloudData.syncToken, localEpoch: localSyncEpoch() });
+      else this.cloudCheckpoints.delete(checkpointKey);
 
       return {
         pushed: {

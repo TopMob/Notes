@@ -1,9 +1,8 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { Plus, MoreVertical, Trash2, Edit2, Link, Check } from 'lucide-react';
+import { Plus, MoreVertical, Trash2, Edit2 } from 'lucide-react';
 import { useNotebookStore } from '../../store/useNotebookStore';
 import { useUiStore } from '../../store/useUiStore';
 import { Page } from '../../types/notebook';
-import { formatPageUrl, titleToSlug } from '../../utils/slug';
 import { PopoverMenu } from '../common/PopoverMenu';
 
 export const PagesList: React.FC = () => {
@@ -20,7 +19,6 @@ export const PagesList: React.FC = () => {
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [menu, setMenu] = useState<{ pageId: string; anchor: HTMLElement } | null>(null);
-  const [copiedPageId, setCopiedPageId] = useState<string | null>(null);
   const renameCancelledRef = useRef(false);
 
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -45,19 +43,6 @@ export const PagesList: React.FC = () => {
     if (id && title && !cancelled) {
       await renamePage(id, title);
     }
-  };
-
-  const handleCopyLink = async (page: Page) => {
-    const slug = page.slug || titleToSlug(page.title);
-    const url = formatPageUrl(slug, true);
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopiedPageId(page.id);
-      setTimeout(() => setCopiedPageId(null), 2000);
-    } catch {
-      // fallback
-    }
-    setMenu(null);
   };
 
   const menuPage = menu ? pages.find((p) => p.id === menu.pageId) : undefined;
@@ -128,19 +113,6 @@ export const PagesList: React.FC = () => {
 
                   {isMenuOpen && menuPage && (
                     <PopoverMenu anchorEl={menu!.anchor} onClose={closeMenu} width={208}>
-                      <button
-                        className="dropdown-item"
-                        onClick={() => handleCopyLink(menuPage)}
-                      >
-                        {copiedPageId === menuPage.id ? (
-                          <Check size={13} style={{ color: 'var(--status-success)' }} />
-                        ) : (
-                          <Link size={13} />
-                        )}
-                        <span>
-                          {copiedPageId === menuPage.id ? 'Ссылка скопирована!' : 'Копировать ссылку'}
-                        </span>
-                      </button>
                       <button
                         className="dropdown-item"
                         onClick={() => handleStartRename(menuPage)}

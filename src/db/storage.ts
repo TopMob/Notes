@@ -602,6 +602,7 @@ export async function exportFullBackup(): Promise<string> {
 export async function importFullBackup(backupJson: string): Promise<{ success: boolean; stats: string }> {
   const parsed = JSON.parse(backupJson);
   validateLegacyBackup(parsed);
+  syncEngine.invalidateCloudCheckpoints();
 
   const {
     notebooks = [],
@@ -630,6 +631,7 @@ export async function importFullBackup(backupJson: string): Promise<{ success: b
   for (const tb of textBlocks) await tx.objectStore('textBlocks').put(tb);
 
   await tx.done;
+  syncEngine.invalidateCloudCheckpoints();
 
   return {
     success: true,

@@ -40,6 +40,7 @@ export interface Stroke {
 }
 
 export interface ShapeObject {
+  axisMode?: 'four-quadrant';
   id: string;
   pageId: string;
   type: ShapeType;

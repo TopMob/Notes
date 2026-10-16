@@ -519,7 +519,7 @@ export const RibbonDraw: React.FC = () => {
               }}
             >
               <SplitSquareVertical size={15} />
-              <span>Оси координат X/Y</span>
+              <span>Оси X/Y (4 четверти)</span>
             </button>
 
             {/* Быстрый выбор цвета фигуры прямо в меню */}
