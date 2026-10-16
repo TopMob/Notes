@@ -3,6 +3,26 @@ import assert from 'node:assert/strict';
 import { getStroke } from 'perfect-freehand';
 import { loadTs } from './helpers/load-ts.mjs';
 
+test('visual frames coalesce, use latest work and cancel safely on page leave', () => {
+  const callbacks = new Map(); let id = 0;
+  globalThis.requestAnimationFrame = callback => { callbacks.set(++id, callback); return id; };
+  globalThis.cancelAnimationFrame = key => callbacks.delete(key);
+  try {
+    const { FrameTask } = loadTs('src/canvas/engine/FrameTask.ts');
+    const frame = new FrameTask(); const drawn = [];
+    frame.request(() => drawn.push('old'));
+    frame.request(() => drawn.push('latest'));
+    assert.equal(callbacks.size, 1);
+    const [key, callback] = [...callbacks][0]; callbacks.delete(key); callback();
+    assert.deepEqual(drawn, ['latest']);
+    frame.request(() => drawn.push('closed page')); frame.cancel();
+    assert.equal(callbacks.size, 0);
+    frame.request(() => drawn.push('new page'));
+    [...callbacks.values()][0]();
+    assert.deepEqual(drawn, ['latest', 'new page']);
+  } finally { delete globalThis.requestAnimationFrame; delete globalThis.cancelAnimationFrame; }
+});
+
 test('stroke geometry is identical, reused across camera/style changes and invalidated on edits', () => {
   let calls = 0;
   const { drawStrokeToCanvas } = loadTs('src/canvas/stroke/freehand.ts', {

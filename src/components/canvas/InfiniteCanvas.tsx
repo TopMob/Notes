@@ -1,5 +1,6 @@
 import { useShallow } from 'zustand/react/shallow';
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { FrameTask } from '../../canvas/engine/FrameTask';
 import { registerCanvasPageLeave, useCanvasStore } from '../../store/useCanvasStore';
 import { Viewport } from '../../canvas/engine/Viewport';
 import { BackgroundLayer } from './BackgroundLayer';
@@ -22,6 +23,14 @@ export const InfiniteCanvas: React.FC = () => {
   const contentCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const activeCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const selectionCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const contentFrame = useMemo(() => new FrameTask(), []);
+  const cursorFrame = useMemo(() => new FrameTask(), []);
+  const previewFrame = useMemo(() => new FrameTask(), []);
+  useEffect(() => () => {
+    contentFrame.cancel();
+    cursorFrame.cancel();
+    previewFrame.cancel();
+  }, [contentFrame, cursorFrame, previewFrame]);
 
   const {
     activeTool,
@@ -107,6 +116,7 @@ export const InfiniteCanvas: React.FC = () => {
   const isPointerDownRef = useRef(false);
   const isRightClickEraserRef = useRef(false);
   const strokePointsRef = useRef<Point[]>([]);
+  const strokeBoundsRef = useRef(Viewport.computeBounds([]));
   const shapeAnchorRef = useRef<Point | null>(null);
   const lassoPointsRef = useRef<Point[]>([]);
   const panStartRef = useRef<{ clientX: number; clientY: number; camX: number; camY: number } | null>(null);
@@ -455,8 +465,8 @@ export const InfiniteCanvas: React.FC = () => {
 
   // Запуск перерисовки content-canvas при изменении штрихов/камеры
   useEffect(() => {
-    renderContentLayer();
-  }, [renderContentLayer, strokes, shapes]);
+    contentFrame.request(renderContentLayer);
+  }, [contentFrame, renderContentLayer]);
 
   // Находим общий bounding box для выделенных элементов
   const computeSelectionBounds = useCallback((): { minX: number; minY: number; maxX: number; maxY: number } | null => {
@@ -537,7 +547,7 @@ export const InfiniteCanvas: React.FC = () => {
   }, [camera.zoom, spatialIndex]);
 
   // Отрисовка слоя выделения и кружка ластика
-  const renderSelectionAndCursorLayer = useCallback(() => {
+  const drawSelectionAndCursorLayer = useCallback(() => {
     const canvas = selectionCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -672,11 +682,18 @@ export const InfiniteCanvas: React.FC = () => {
     highlighterWidth,
   ]);
 
+  const selectionDrawRef = useRef(drawSelectionAndCursorLayer);
+  selectionDrawRef.current = drawSelectionAndCursorLayer;
+  const renderSelectionAndCursorLayer = useCallback(() => {
+    cursorFrame.request(() => selectionDrawRef.current());
+  }, [cursorFrame]);
+
   useEffect(() => {
     renderSelectionAndCursorLayer();
-  }, [renderSelectionAndCursorLayer, selectedStrokeIds, selectedShapeIds, selectedTextBlockIds]);
+  }, [renderSelectionAndCursorLayer, drawSelectionAndCursorLayer]);
 
   const triggerMouseChordUndo = useCallback((e: React.MouseEvent | MouseEvent | React.PointerEvent) => {
+    previewFrame.cancel();
     e.preventDefault();
     e.stopPropagation();
 
@@ -1064,6 +1081,7 @@ export const InfiniteCanvas: React.FC = () => {
         t: Date.now(),
       };
       strokePointsRef.current = [pt];
+      strokeBoundsRef.current = Viewport.computeBounds([pt]);
 
       if (activeCanvas) {
         const ctx = activeCanvas.getContext('2d');
@@ -1323,8 +1341,21 @@ export const InfiniteCanvas: React.FC = () => {
         pressure: e.pressure > 0 ? e.pressure : 0.5,
         t: Date.now(),
       };
-      strokePointsRef.current.push(pt);
+      const nativeEvent = 'nativeEvent' in e ? e.nativeEvent : e;
+      const samples = nativeEvent.getCoalescedEvents?.() || [];
+      const events = samples.length ? samples : [e];
+      for (const sample of events) {
+        const position = Viewport.screenToWorld({ x: sample.clientX - rect.left, y: sample.clientY - rect.top }, camera, viewportSize);
+        const point = { ...pt, ...position, pressure: sample.pressure > 0 ? sample.pressure : 0.5 };
+        strokePointsRef.current.push(point);
+        const bounds = strokeBoundsRef.current;
+        bounds.minX = Math.min(bounds.minX, point.x - 4);
+        bounds.minY = Math.min(bounds.minY, point.y - 4);
+        bounds.maxX = Math.max(bounds.maxX, point.x + 4);
+        bounds.maxY = Math.max(bounds.maxY, point.y + 4);
+      }
 
+      previewFrame.request(() => {
       // Отрисовываем текущий штрих на activeCanvas
       const activeCanvas = activeCanvasRef.current;
       if (activeCanvas) {
@@ -1343,18 +1374,21 @@ export const InfiniteCanvas: React.FC = () => {
             baseWidth: activeTool === 'pen' ? penWidth : highlighterWidth,
             opacity: activeTool === 'pen' ? 1.0 : 0.35,
             blendMode: activeTool === 'pen' ? 'source-over' : 'multiply',
-            bounds: Viewport.computeBounds(strokePointsRef.current),
+            bounds: strokeBoundsRef.current,
             createdAt: Date.now(),
           };
 
           drawStrokeToCanvas(ctx, tempStroke);
         }
       }
+      });
       return;
     }
 
     // Фигуры
     if (activeTool === 'shape' && shapeAnchorRef.current) {
+      previewFrame.request(() => {
+      if (!shapeAnchorRef.current) return;
       const activeCanvas = activeCanvasRef.current;
       if (activeCanvas) {
         const ctx = activeCanvas.getContext('2d');
@@ -1381,6 +1415,7 @@ export const InfiniteCanvas: React.FC = () => {
           drawShapeToCanvas(ctx, tempShape);
         }
       }
+      });
       return;
     }
 
@@ -1388,6 +1423,7 @@ export const InfiniteCanvas: React.FC = () => {
     if (activeTool === 'lasso') {
       lassoPointsRef.current.push({ ...worldPos, pressure: 0.5, t: Date.now() });
 
+      previewFrame.request(() => {
       const selCanvas = selectionCanvasRef.current;
       if (selCanvas) {
         const ctx = selCanvas.getContext('2d');
@@ -1410,6 +1446,7 @@ export const InfiniteCanvas: React.FC = () => {
           ctx.restore();
         }
       }
+      });
       return;
     }
   };
@@ -1461,6 +1498,7 @@ export const InfiniteCanvas: React.FC = () => {
   };
 
   const handleSinglePointerUp = (e: React.PointerEvent | PointerEvent) => {
+    previewFrame.cancel();
     useCanvasStore.getState().endInteraction();
     if ((e.buttons & 1) === 0 || (e.buttons & 2) === 0) {
       isMouseChordActiveRef.current = false;
@@ -1674,6 +1712,7 @@ export const InfiniteCanvas: React.FC = () => {
 
   // Отмена незавершённого одиночного штриха (буферизация при двухпальцевом жесте или palm rejection)
   const cancelActiveStroke = useCallback(() => {
+    previewFrame.cancel();
     useCanvasStore.getState().endInteraction();
     strokePointsRef.current = [];
     shapeAnchorRef.current = null;
