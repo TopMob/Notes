@@ -1,6 +1,7 @@
 import { useShallow } from 'zustand/react/shallow';
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { FrameTask } from '../../canvas/engine/FrameTask';
+import { appendOnlyItem, ContentSnapshot, itemTime } from '../../canvas/engine/contentUpdates';
 import { registerCanvasPageLeave, useCanvasStore } from '../../store/useCanvasStore';
 import { Viewport } from '../../canvas/engine/Viewport';
 import { BackgroundLayer } from './BackgroundLayer';
@@ -23,6 +24,7 @@ export const InfiniteCanvas: React.FC = () => {
   const contentCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const activeCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const selectionCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const contentSnapshotRef = useRef<ContentSnapshot | null>(null);
   const contentFrame = useMemo(() => new FrameTask(), []);
   const cursorFrame = useMemo(() => new FrameTask(), []);
   const previewFrame = useMemo(() => new FrameTask(), []);
@@ -414,6 +416,17 @@ export const InfiniteCanvas: React.FC = () => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const next = { camera, viewportSize, dpr, strokes, shapes };
+    const added = appendOnlyItem(contentSnapshotRef.current, next);
+    if (added) {
+      Viewport.applyTransform(ctx, camera, viewportSize, dpr);
+      if ('tool' in added) drawStrokeToCanvas(ctx, added);
+      else drawShapeToCanvas(ctx, added);
+      contentSnapshotRef.current = { ...next, latestTime: itemTime(added) };
+      return;
+    }
+    contentSnapshotRef.current = null;
+
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -461,6 +474,10 @@ export const InfiniteCanvas: React.FC = () => {
         drawShapeToCanvas(ctx, item);
       }
     }
+    contentSnapshotRef.current = {
+      ...next,
+      latestTime: [...strokes, ...shapes].reduce((time, item) => Math.max(time, itemTime(item)), -Infinity),
+    };
   }, [camera, viewportSize, dpr, strokes, shapes, spatialIndex]);
 
   // Запуск перерисовки content-canvas при изменении штрихов/камеры
@@ -1564,16 +1581,6 @@ export const InfiniteCanvas: React.FC = () => {
           createdAt: Date.now(),
         };
 
-        // Непосредственно рисуем на постоянный холст
-        const contentCanvas = contentCanvasRef.current;
-        if (contentCanvas) {
-          const cCtx = contentCanvas.getContext('2d');
-          if (cCtx) {
-            Viewport.applyTransform(cCtx, camera, viewportSize, dpr);
-            drawStrokeToCanvas(cCtx, newStroke);
-          }
-        }
-
         addStroke(newStroke);
       }
 
@@ -1612,15 +1619,6 @@ export const InfiniteCanvas: React.FC = () => {
         bounds: computeShapeBounds(shapeAnchorRef.current, endPt, shapeWidth),
         createdAt: now,
       };
-
-      const contentCanvas = contentCanvasRef.current;
-      if (contentCanvas) {
-        const cCtx = contentCanvas.getContext('2d');
-        if (cCtx) {
-          Viewport.applyTransform(cCtx, camera, viewportSize, dpr);
-          drawShapeToCanvas(cCtx, newShape);
-        }
-      }
 
       addShape(newShape);
       shapeAnchorRef.current = null;

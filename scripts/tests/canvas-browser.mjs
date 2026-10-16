@@ -60,6 +60,37 @@ try {
   assert.equal(await page.evaluate(()=>window.store.getState().strokes.length),0);
   await page.evaluate(()=>window.stack.redo());
   assert.equal(await page.evaluate(()=>window.store.getState().strokes[0].points.length),points);
+  const matchFullDraw=async()=>{
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(async()=>{
+      const {drawStrokeToCanvas}=await import('/src/canvas/stroke/freehand.ts');
+      const {drawShapeToCanvas}=await import('/src/canvas/stroke/shapes.ts');
+      const {Viewport}=await import('/src/canvas/engine/Viewport.ts');
+      const {itemTime}=await import('/src/canvas/engine/contentUpdates.ts');
+      const actual=document.querySelector('.canvas-content'), reference=document.createElement('canvas');
+      reference.width=actual.width;reference.height=actual.height;
+      const ctx=reference.getContext('2d'), state=window.store.getState();
+      const rect=actual.getBoundingClientRect(), vp={w:rect.width,h:rect.height};
+      Viewport.applyTransform(ctx,state.camera,vp,devicePixelRatio);
+      const visible=state.spatialIndex.query(Viewport.getVisibleWorldBounds(state.camera,vp,.2));
+      const markers=visible.filter(s=>s.tool==='highlighter').sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+      const main=visible.filter(s=>s.tool!=='highlighter').sort((a,b)=>itemTime(a)-itemTime(b));
+      for(const item of [...markers,...main]) 'tool' in item?drawStrokeToCanvas(ctx,item):drawShapeToCanvas(ctx,item);
+      const expected=ctx.getImageData(0,0,reference.width,reference.height).data;
+      const got=actual.getContext('2d').getImageData(0,0,actual.width,actual.height).data;
+      return expected.every((byte,i)=>byte===got[i]);
+    }),true,'incremental layer must match a full redraw pixel for pixel');
+  };
+  await matchFullDraw();
+  for(const tool of ['pen','highlighter','pen']) {
+    await page.evaluate(tool=>{
+      const state=window.store.getState(), last=state.strokes[0];
+      state.addStroke({...last,id:crypto.randomUUID(),tool,color:tool==='pen'?'#0000ff':'#ffff00',baseWidth:tool==='pen'?3:30,opacity:tool==='pen'?1:.35,blendMode:tool==='pen'?'source-over':'multiply',createdAt:Date.now()});
+    },tool);
+    await matchFullDraw();
+  }
+  await page.evaluate(()=>window.stack.undo()); await matchFullDraw();
+  await page.evaluate(()=>window.stack.redo()); await matchFullDraw();
   // Leaving during a held stroke commits it on the original page before loading.
   await page.mouse.move(100,300); await page.mouse.down(); await page.mouse.move(300,350,{steps:12});
   await page.evaluate(()=>window.store.getState().loadPage('other'));

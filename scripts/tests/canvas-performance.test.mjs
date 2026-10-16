@@ -4,6 +4,18 @@ import { getStroke } from 'perfect-freehand';
 import { crc32 } from 'node:zlib';
 import { loadTs } from './helpers/load-ts.mjs';
 
+test('append rendering rejects markers, edits, camera changes, undo and ambiguous z-order', () => {
+  const {appendOnlyItem}=loadTs('src/canvas/engine/contentUpdates.ts');
+  const a={id:'a',tool:'pen',createdAt:10}, b={id:'b',tool:'pen',createdAt:20};
+  const previous={camera:{x:0,y:0,zoom:1},viewportSize:{w:100,h:100},dpr:1,strokes:[a],shapes:[],latestTime:10};
+  assert.equal(appendOnlyItem(previous,{...previous,strokes:[a,b]}),b);
+  assert.equal(appendOnlyItem(previous,{...previous,strokes:[a,{...b,tool:'highlighter'}]}),null);
+  assert.equal(appendOnlyItem(previous,{...previous,strokes:[{...a},b]}),null);
+  assert.equal(appendOnlyItem(previous,{...previous,camera:{...previous.camera},strokes:[a,b]}),null);
+  assert.equal(appendOnlyItem(previous,{...previous,strokes:[]}),null);
+  assert.equal(appendOnlyItem(previous,{...previous,strokes:[a,{...b,createdAt:10}]}),null);
+});
+
 test('PNG tiling preserves all pixels at 2x and ZIP preserves every original byte and CRC', async () => {
   const {planPngTiles,zipFiles}=loadTs('src/utils/pngExport.ts');
   for (const [width,height] of [[1000,1000],[6000,7000],[100,30000]]) {
