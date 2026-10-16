@@ -24,7 +24,8 @@ function loadModule(filename, boundaries = {}, cache = new Map()) {
 globalThis.localStorage = { getItem: () => null, setItem: () => {} };
 const stroke = (id = 's', color = 'black') => ({ id, pageId: 'p', tool: 'pen', color, points: [{ x: 1, y: 2, pressure: .5, t: 0 }], baseWidth: 3, opacity: 1, blendMode: 'source-over', bounds: { minX: 1, minY: 2, maxX: 1, maxY: 2 }, createdAt: 0 });
 function canvas(write, load = async () => ({ strokes: [], shapes: [], textBlocks: [] })) {
-  const { useCanvasStore: store } = loadModule('src/store/useCanvasStore.ts', { '../db/storage': { savePageDiff: write, savePageFull: write, loadPageData: load } });
+  const { useCanvasStore: store, registerCanvasPageLeave } = loadModule('src/store/useCanvasStore.ts', { '../db/storage': { savePageDiff: write, savePageFull: write, loadPageData: load } });
+  store.registerPageLeave = registerCanvasPageLeave;
   store.setState({ currentPageId: 'p' }); return store;
 }
 function deferred() {
@@ -156,4 +157,41 @@ test('an older page load cannot overwrite a newer transition', async () => {
   const old = store.getState().loadPage('old'); await new Promise(resolve => setImmediate(resolve));
   await store.getState().loadPage('new'); gate.resolve({ strokes: [], shapes: [], textBlocks: [] });
   await assert.rejects(old, /новым переходом/); assert.equal(store.getState().currentPageId, 'new');
+});
+
+test('page transition finishes and persists the active gesture on its original page', async () => {
+  const writes = [], store = canvas(async (id, diff) => writes.push({ id, diff }));
+  let active = true;
+  const unregister = store.registerPageLeave(() => { if (active) { active = false; store.getState().addStroke(stroke('unfinished')); } });
+  try {
+    await store.getState().loadPage('new');
+    assert.equal(writes[0].id, 'p');
+    assert.equal(writes[0].diff.strokes.put[0].pageId, 'p');
+    assert.equal(store.getState().currentPageId, 'new');
+    assert.deepEqual(store.getState().strokes, []);
+  } finally { unregister(); }
+});
+
+test('stale callbacks cannot insert objects from the previous page into a new canvas', async () => {
+  const writes = [], store = canvas(async (id, diff) => writes.push({ id, diff }));
+  await store.getState().loadPage('new');
+  store.getState().addStroke(stroke('stale'));
+  store.getState().addShape({ id: 'stale-shape', pageId: 'p' });
+  store.getState().addTextBlock({ id: 'stale-text', pageId: 'p' });
+  assert.deepEqual(store.getState().strokes, []);
+  assert.deepEqual(store.getState().shapes, []);
+  assert.deepEqual(store.getState().textBlocks, []);
+  await store.getState().flushAllSaves();
+  assert.equal(writes.length, 0);
+});
+
+test('a stroke still held by the pen protects its page from incoming sync before pointerup', async () => {
+  const store = canvas(async () => {}), before = store.getState().getEditRevision();
+  store.getState().beginInteraction();
+  assert.ok(store.getState().getEditRevision() > before);
+  assert.deepEqual(store.getState().getUnsavedPageIds(), ['p']);
+  await store.getState().flushAllSaves();
+  assert.deepEqual(store.getState().getUnsavedPageIds(), ['p']);
+  store.getState().endInteraction();
+  assert.deepEqual(store.getState().getUnsavedPageIds(), []);
 });

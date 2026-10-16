@@ -1,13 +1,25 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createClient } from '@libsql/client';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { SignJWT, generateKeyPair } from 'jose';
 import { authenticate, clerkIssuer } from '../../server/sync-auth.mjs';
 import { commit, pull, ensureAssets, putAsset, completeAsset, assetManifest, pack, decode } from '../../server/turso-sync.mjs';
 import { versionHash, cloudElementsFor } from '../../src/services/sync/protocol.mjs';
+import { createSnapshotTransfer, readSnapshotPart, uploadCommitPart, readCommitTransfer, releaseTransfer, TRANSFER_PART_SIZE } from '../../server/sync-transfer.mjs';
+
+function transportProvider() {
+  const require = createRequire(import.meta.url), ts = require('typescript'), module = { exports: {} };
+  const js = ts.transpileModule(readFileSync(new URL('../../src/services/sync/tursoProvider.ts', import.meta.url), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } }).outputText;
+  Function('require', 'module', 'exports', js)(name => {
+    if (name === './compression') return { compressJson: async value => pack(value), decompressJson: async value => decode(value) };
+    throw Error(`Unexpected runtime import ${name}`);
+  }, module, module.exports);
+  const provider = new module.exports.TursoProvider(); provider.setTokenProvider(async () => 'fixture');
+  return provider;
+}
 
 async function fixture() {
   const client = createClient({ url: 'file::memory:' });
@@ -139,4 +151,86 @@ test('actual Turso transport compresses large pages and round-trips multi-megaby
     assert.deepEqual(Buffer.from(await (await provider.downloadAsset('asset_transport')).arrayBuffer()),bytes);
     assert.ok(maxBytes<=512*1024,'A transport request/part exceeded its bound');
   } finally { globalThis.fetch=originalFetch; client.close(); }
+});
+
+test('large note uploads and whole-account snapshots cross the old 3 MB limit in bounded verified parts', async () => {
+  const { client, page, elements } = await fixture();
+  const originalFetch = globalThis.fetch;
+  let uploads = 0, downloads = 0, maxRequest = 0, maxResponse = 0;
+  globalThis.fetch = async (_path, options) => {
+    assert.equal(options.headers.Authorization, 'Bearer fixture');
+    maxRequest = Math.max(maxRequest, Buffer.byteLength(options.body));
+    const body = JSON.parse(options.body);
+    let result;
+    if (body.action === 'commit-part') { uploads++; await uploadCommitPart(client, 'u', body); result = { saved: true }; }
+    else if (body.action === 'commit-transfer') { result = await commit(client, 'u', decode(await readCommitTransfer(client, 'u', body.id))); await releaseTransfer(client, 'u', body.id); }
+    else if (body.action === 'pull') result = { transfer: await createSnapshotTransfer(client, 'u', pack(await pull(client, 'u'))) };
+    else if (body.action === 'pull-part') { downloads++; result = { transfer: await readSnapshotPart(client, 'u', body.id, body.part) }; }
+    else if (body.action === 'release-transfer') { await releaseTransfer(client, 'u', body.id); result = { released: true }; }
+    else throw Error(`Unexpected action ${body.action}`);
+    maxResponse = Math.max(maxResponse, Buffer.byteLength(JSON.stringify(result)));
+    return Response.json(result);
+  };
+  try {
+    const provider = transportProvider();
+    const contentHTML = randomBytes(3 * 1024 * 1024).toString('base64');
+    const large = { ...elements, textBlocks: [{ ...elements.textBlocks[0], contentHTML }] };
+    assert.ok(Buffer.byteLength(pack(large)) > 3 * 1024 * 1024, 'fixture must exceed the old compressed snapshot limit');
+    await provider.commit('u', { entity: 'pages', id: 'p', action: 'put', expected: null, record: page, elements: large });
+    const cloud = await provider.pullAll('u');
+    assert.equal(cloud.elements[0].data.contentHTML, contentHTML);
+    assert.ok(uploads > 1 && downloads > 1);
+    assert.ok(maxRequest < 512 * 1024 && maxResponse < 512 * 1024);
+    assert.equal(Number((await client.execute('SELECT count(*) AS count FROM notes_transfer_chunks')).rows[0].count), 0);
+  } finally { globalThis.fetch = originalFetch; client.close(); }
+});
+
+test('snapshot parts stay consistent, expire, and are isolated from other accounts and commit transfers', async () => {
+  const { client } = await fixture();
+  try {
+    const payload = pack({ data: randomBytes(400000).toString('base64') });
+    const transfer = await createSnapshotTransfer(client, 'u', payload);
+    assert.ok(transfer.total > 1);
+    await client.execute({ sql: "UPDATE notebooks SET title='Changed after snapshot' WHERE user_id='u'", args: [] });
+    const parts = [];
+    for (let part = 0; part < transfer.total; part++) parts.push((await readSnapshotPart(client, 'u', transfer.id, part)).data);
+    assert.equal(parts.join(''), payload);
+    await assert.rejects(readSnapshotPart(client, 'other', transfer.id, 0), error => error.status === 410);
+    await assert.rejects(readCommitTransfer(client, 'u', transfer.id), error => error.status === 409);
+    await client.execute({ sql: 'UPDATE notes_transfer_chunks SET created_at=0 WHERE id=?', args: [transfer.id] });
+    await assert.rejects(readSnapshotPart(client, 'u', transfer.id, 0), error => error.status === 410);
+  } finally { client.close(); }
+});
+
+test('incomplete or corrupt uploads cannot become authoritative note content', async () => {
+  const { client } = await fixture();
+  try {
+    const id = randomUUID(), payload = 'a'.repeat(TRANSFER_PART_SIZE + 1);
+    const hash = createHash('sha256').update(payload).digest('hex');
+    const input = { id, hash, total: 2 };
+    await uploadCommitPart(client, 'u', { ...input, part: 0, data: payload.slice(0, TRANSFER_PART_SIZE) });
+    await assert.rejects(readCommitTransfer(client, 'u', id), error => error.status === 409);
+    await uploadCommitPart(client, 'u', { ...input, part: 1, data: 'corrupt' });
+    await assert.rejects(readCommitTransfer(client, 'u', id), error => error.status === 409);
+    await uploadCommitPart(client, 'u', { ...input, part: 1, data: 'a' });
+    assert.equal(await readCommitTransfer(client, 'u', id), payload);
+    await assert.rejects(readCommitTransfer(client, 'other', id), error => error.status === 409);
+    assert.equal((await pull(client, 'u')).notebooks[0].title, 'Fixture');
+  } finally { client.close(); }
+});
+
+test('client rejects missing or corrupt snapshot parts before exposing any cloud notes', async () => {
+  const originalFetch = globalThis.fetch;
+  const provider = transportProvider();
+  const id = randomUUID(), payload = pack({ notebooks: [], sections: [], pages: [], elements: [] });
+  const hash = createHash('sha256').update(payload).digest('hex');
+  try {
+    globalThis.fetch = async (_path, options) => {
+      const body = JSON.parse(options.body);
+      return Response.json({ transfer: { id, hash, total: 2, part: body.action === 'pull' ? 0 : 1, data: body.action === 'pull' ? payload : 'corrupt' } });
+    };
+    await assert.rejects(provider.pullAll('u'), /Контрольная сумма/);
+    globalThis.fetch = async () => Response.json({ transfer: { id, hash, total: 2, part: 0, data: payload } });
+    await assert.rejects(provider.pullAll('u'), /Неполный снимок/);
+  } finally { globalThis.fetch = originalFetch; }
 });

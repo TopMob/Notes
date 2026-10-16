@@ -402,3 +402,56 @@ test('cloud drawings without page metadata are not treated as a matching deletio
   assert.equal(tables.strokes.length, 1);
 });
 
+function notebookEditingFixture() {
+  const notebook = { id: 'n', title: 'Notebook' }, section = { id: 's', notebookId: 'n', title: 'Section' };
+  const page = { id: 'p', sectionId: 's', title: 'Current', order: 0, createdAt: 1, camera: { x: 0, y: 0, zoom: 1 }, background: 'plain' };
+  const pages = [page, { ...page, id: 'other' }], loaded = [];
+  const canvas = { currentPageId: 'p', getEditRevision: () => 0, flushAllSaves: async () => {}, loadPage: async id => { loaded.push(id); canvas.currentPageId = id; } };
+  const storage = { loadNotebooks: async () => [notebook], loadSections: async () => [section], loadPages: async () => pages, loadAllPages: async () => pages, createPage: async page => { pages.push(page); } };
+  const { useNotebookStore } = loadModule('src/store/useNotebookStore.ts', { '../db/storage': storage, './useCanvasStore': { useCanvasStore: { getState: () => canvas } } });
+  useNotebookStore.setState({ notebooks: [notebook], activeNotebook: notebook, sections: [section], activeSection: section, pages: [...pages], activePage: page });
+  return { store: useNotebookStore, canvas, storage, pages, loaded };
+}
+
+test('background sync of another page does not reload the open canvas or reset its viewport', async () => {
+  const { store, loaded } = notebookEditingFixture();
+  await store.getState().refreshFromStorage(new Set(['other']));
+  assert.deepEqual(loaded, []);
+  assert.equal(store.getState().activePage.id, 'p');
+  await store.getState().refreshFromStorage(new Set(['p']));
+  assert.deepEqual(loaded, ['p']);
+});
+
+test('a delayed background refresh cannot navigate back after the user changes pages', async () => {
+  const { store, canvas, storage, pages, loaded } = notebookEditingFixture(), gate = deferred();
+  storage.loadNotebooks = () => gate.promise;
+  const refresh = store.getState().refreshFromStorage(new Set(['p']));
+  canvas.currentPageId = 'other';
+  store.setState({ activePage: pages[1] });
+  gate.resolve([{ id: 'n', title: 'Notebook' }]);
+  await refresh;
+  assert.equal(store.getState().activePage.id, 'other');
+  assert.deepEqual(loaded, []);
+});
+
+test('new page becomes active only after its canvas loads successfully', async () => {
+  const { store, canvas } = notebookEditingFixture(), gate = deferred();
+  canvas.loadPage = async id => { await gate.promise; canvas.currentPageId = id; };
+  const creating = store.getState().addPage('New');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(store.getState().activePage.id, 'p');
+  assert.equal(canvas.currentPageId, 'p');
+  gate.resolve();
+  const page = await creating;
+  assert.equal(store.getState().activePage.id, page.id);
+  assert.equal(canvas.currentPageId, page.id);
+});
+
+test('blocked page creation preserves the previous active page and canvas', async () => {
+  const { store, canvas } = notebookEditingFixture();
+  canvas.loadPage = async () => { throw Error('Still drawing'); };
+  await assert.rejects(store.getState().addPage('New'), /Still drawing/);
+  assert.equal(store.getState().activePage.id, 'p');
+  assert.equal(canvas.currentPageId, 'p');
+});
+

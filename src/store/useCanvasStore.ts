@@ -34,6 +34,11 @@ const pageDirtyMap = new Map<string, PageDirtyTracker>();
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const maxSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingSaves = new Map<string, Promise<void>>();
+const pageLeaveListeners = new Set<() => void>();
+export function registerCanvasPageLeave(listener: () => void): () => void {
+  pageLeaveListeners.add(listener);
+  return () => { pageLeaveListeners.delete(listener); };
+}
 
 function restoreDirty(pageId: string, failed: PageDirtyTracker) {
   const newer = getOrCreateDirty(pageId);
@@ -171,12 +176,15 @@ interface CanvasState {
   flushAllSaves: () => Promise<void>;
   getUnsavedPageIds: () => string[];
   getEditRevision: () => number;
+  beginInteraction: () => void;
+  endInteraction: () => void;
   triggerAutosave: () => void;
 }
 
 export const useCanvasStore = create<CanvasState>((set, get) => {
   let pageLoadSequence = 0;
   let editSequence = 0;
+  let interactionPageId: string | null = null;
   const spatialIndex = new SpatialIndex();
 
   /**
@@ -420,6 +428,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     loadPage: async (pageId: string, initialCamera?: Camera, initialBg?: CanvasBackground) => {
       const sequence = ++pageLoadSequence;
       const prevPageId = get().currentPageId;
+      // Finish the in-progress gesture on its original page before saving it.
+      for (const listener of pageLeaveListeners) listener();
       if (prevPageId) {
         // Принудительно сохраняем предыдущую страницу до переключения
         await flushSave(prevPageId);
@@ -427,6 +437,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
       const editsBeforeLoad = editSequence;
       const { strokes, shapes, textBlocks } = await loadPageData(pageId);
+      if (sequence === pageLoadSequence && get().currentPageId === prevPageId) for (const listener of pageLeaveListeners) listener();
       if (sequence !== pageLoadSequence || get().currentPageId !== prevPageId) {
         throw new Error('Загрузка страницы заменена новым переходом');
       }
@@ -456,6 +467,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     addStroke: (stroke) => {
       const pageId = get().currentPageId;
+      if (!pageId || stroke.pageId !== pageId) return;
       globalCommandStack.execute({
         execute: () => {
           set((state) => {
@@ -675,6 +687,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     addShape: (shape) => {
       const pageId = get().currentPageId;
+      if (!pageId || shape.pageId !== pageId) return;
       globalCommandStack.execute({
         execute: () => {
           set((state) => {
@@ -829,6 +842,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     addTextBlock: (block) => {
       const pageId = get().currentPageId;
+      if (!pageId || block.pageId !== pageId) return;
       globalCommandStack.execute({
         execute: () => {
           set((state) => {
@@ -1155,8 +1169,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     flushSave,
-    getUnsavedPageIds: () => [...new Set([...pageDirtyMap.keys(), ...pendingSaves.keys()])],
+    getUnsavedPageIds: () => [...new Set([...pageDirtyMap.keys(), ...pendingSaves.keys(), ...(interactionPageId ? [interactionPageId] : [])])],
     getEditRevision: () => editSequence,
+    beginInteraction: () => { if (!interactionPageId) { interactionPageId = get().currentPageId; editSequence++; } },
+    endInteraction: () => { if (interactionPageId) { interactionPageId = null; editSequence++; } },
     flushAllSaves: async () => {
       const ids = new Set([...pageDirtyMap.keys(), ...pendingSaves.keys()]);
       for (const id of ids) await flushSave(id);

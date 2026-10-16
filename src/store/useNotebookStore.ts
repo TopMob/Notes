@@ -72,7 +72,7 @@ interface NotebookState {
   removePage: (pageId: string) => Promise<void>;
 
   renamePage: (pageId: string, newTitle: string) => Promise<void>;
-  refreshFromStorage: () => Promise<void>;
+  refreshFromStorage: (changedPageIds?: ReadonlySet<string>) => Promise<void>;
 }
 
 let isPopStateBound = false;
@@ -492,13 +492,12 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
 
     await dbCreatePage(newPage);
 
+    if (get().activeSection?.id !== activeSection.id) return newPage;
     const updatedPages = [...pages, newPage];
-    set({
-      pages: updatedPages,
-      activePage: newPage,
-    });
-
+    set({ pages: updatedPages });
     await useCanvasStore.getState().loadPage(newPage.id, newPage.camera, newPage.background);
+    if (useCanvasStore.getState().currentPageId !== newPage.id) return newPage;
+    set({ activePage: newPage });
 
     if (typeof window !== 'undefined') {
       window.history.pushState({ pageId: newPage.id }, '', formatPageUrl(pageSlug));
@@ -675,7 +674,9 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
     }
   },
 
-  refreshFromStorage: async () => {
+  refreshFromStorage: async (changedPageIds) => {
+    const startedPageId = useCanvasStore.getState().currentPageId;
+    const startedEdits = useCanvasStore.getState().getEditRevision();
     const notebooks = await loadNotebooks();
     const currentActiveNb = get().activeNotebook;
     const activeNb = notebooks.find((n) => n.id === currentActiveNb?.id) || notebooks[0] || null;
@@ -699,8 +700,10 @@ export const useNotebookStore = create<NotebookState>((set, get) => ({
       }
     }
 
-    if (activePg) {
+    if (useCanvasStore.getState().currentPageId !== startedPageId || useCanvasStore.getState().getEditRevision() !== startedEdits) return;
+    if (activePg && (activePg.id !== startedPageId || !changedPageIds || changedPageIds.has(activePg.id))) {
       await useCanvasStore.getState().loadPage(activePg.id, activePg.camera, activePg.background);
+      if (useCanvasStore.getState().currentPageId !== activePg.id) return;
     }
 
     set({

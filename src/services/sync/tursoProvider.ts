@@ -27,11 +27,37 @@ export class TursoProvider implements ISyncProvider {
     } finally { clearTimeout(timer); }
   }
   async pullAll(_userId: string): Promise<CloudPullResult> {
-    const response = await (await this.request({ action: 'pull' })).json();
+    const response = await (await this.request({ action: 'pull', transport: 'chunks-v1' })).json();
+    if (response.transfer) {
+      const first = response.transfer;
+      if (typeof first.id !== 'string' || !/^[a-f0-9]{64}$/.test(first.hash || '') || !Number.isInteger(first.total) || first.total < 1 || first.total > 256) throw new Error('Некорректный снимок облака');
+      const parts: string[] = [];
+      for (let part = 0; part < first.total; part++) {
+        const next = part === 0 ? first : (await (await this.request({ action: 'pull-part', id: first.id, part })).json()).transfer;
+        if (!next || next.id !== first.id || next.hash !== first.hash || next.total !== first.total || next.part !== part || typeof next.data !== 'string' || next.data.length > 256 * 1024) throw new Error('Неполный снимок облака. Локальные заметки не изменены.');
+        parts.push(next.data);
+      }
+      const payload = parts.join('');
+      if (await this.payloadHash(payload) !== first.hash) throw new Error('Контрольная сумма снимка не совпала. Локальные заметки не изменены.');
+      const cloud = await decompressJson<CloudPullResult>(payload);
+      await this.request({ action: 'release-transfer', id: first.id }).catch(() => {});
+      return cloud;
+    }
     if (typeof response.payload !== 'string') throw new Error('Неполный ответ сервера синхронизации');
     return decompressJson<CloudPullResult>(response.payload);
   }
-  async commit(_userId: string, operation: GuardedOperation): Promise<{ revision: string | null }> { return (await this.request({ action: 'commit', payload: await compressJson(operation) })).json(); }
+  private async payloadHash(payload: string): Promise<string> {
+    return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload)))].map(n => n.toString(16).padStart(2, '0')).join('');
+  }
+  async commit(_userId: string, operation: GuardedOperation): Promise<{ revision: string | null }> {
+    const payload = await compressJson(operation);
+    if (new TextEncoder().encode(JSON.stringify({ action: 'commit', payload })).length <= 2 * 1024 * 1024) return (await this.request({ action: 'commit', payload })).json();
+    const size = 256 * 1024, total = Math.ceil(payload.length / size), id = crypto.randomUUID();
+    if (total > 256) throw new Error('Страница слишком велика для текущей версии синхронизации. Локальная заметка и очередь сохранены.');
+    const hash = await this.payloadHash(payload);
+    for (let part = 0; part < total; part++) await this.request({ action: 'commit-part', id, total, part, hash, data: payload.slice(part * size, (part + 1) * size) });
+    return (await this.request({ action: 'commit-transfer', id })).json();
+  }
   async uploadAsset(id: string, blob: Blob): Promise<void> {
     const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
     const hash = [...bytes].map(n => n.toString(16).padStart(2, '0')).join('');

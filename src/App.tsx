@@ -21,6 +21,7 @@ import { CLERK_PUBLISHABLE_KEY } from './config/clerk';
 export const App: React.FC = () => {
   const { init, isLoading, loadError } = useNotebookStore();
   const { isZenMode, toggleZenMode, theme } = useUiStore();
+  const canvasPageId = useCanvasStore(state => state.currentPageId);
 
   useEffect(() => {
     init();
@@ -92,7 +93,7 @@ export const App: React.FC = () => {
       {/* Основная рабочая область: Сайдбар + Бесконечный холст */}
       <main className="app-main-layout">
         <Sidebar />
-        <InfiniteCanvas />
+        <InfiniteCanvas key={canvasPageId} />
       </main>
 
       {/* Плавающие панели и модальные окна */}

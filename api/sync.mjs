@@ -1,6 +1,7 @@
 import { createClient } from '@libsql/client';
 import { authenticate } from '../server/sync-auth.mjs';
 import { pull, commit, ensureAssets, putAsset, assetManifest, decode, pack, SyncError } from '../server/turso-sync.mjs';
+import { createSnapshotTransfer, readSnapshotPart, uploadCommitPart, readCommitTransfer, releaseTransfer } from '../server/sync-transfer.mjs';
 let client;
 function database() {
   if (!client) {
@@ -33,9 +34,18 @@ export default async function handler(req, res) {
       if (!body || Buffer.byteLength(JSON.stringify(body)) > 3 * 1024 * 1024) throw new SyncError(413, 'Облачный пакет слишком большой; локальные данные сохранены');
       if (body.action === 'pull') {
         const payload = pack(await pull(db, userId));
+        if (body.transport === 'chunks-v1' && payload.length > 512 * 1024) return res.status(200).json({ transfer: await createSnapshotTransfer(db, userId, payload) });
         if (Buffer.byteLength(payload) > 3 * 1024 * 1024) throw new SyncError(413, 'Снимок превышает лимит передачи. Локальные заметки сохранены.');
         return res.status(200).json({ payload });
       }
+      if (body.action === 'pull-part') return res.status(200).json({ transfer: await readSnapshotPart(db, userId, body.id, body.part) });
+      if (body.action === 'commit-part') { await uploadCommitPart(db, userId, body); return res.status(200).json({ saved: true }); }
+      if (body.action === 'commit-transfer') {
+        const result = await commit(db, userId, decode(await readCommitTransfer(db, userId, body.id)));
+        await releaseTransfer(db, userId, body.id).catch(() => {});
+        return res.status(200).json(result);
+      }
+      if (body.action === 'release-transfer') { await releaseTransfer(db, userId, body.id); return res.status(200).json({ released: true }); }
       if (body.action === 'commit') return res.status(200).json(await commit(db, userId, decode(body.payload)));
       throw new SyncError(400, 'Неизвестная операция');
     }

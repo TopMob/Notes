@@ -549,7 +549,7 @@ class SyncEngine {
       // 6. Обновление UI хранилища
       const hasChanges = pulledNotebooks > 0 || pulledSections > 0 || pulledPages > 0 || pulledElements > 0;
       if (hasChanges && useCanvasStore.getState().saveStatus === 'saved') {
-        await useNotebookStore.getState().refreshFromStorage();
+        await useNotebookStore.getState().refreshFromStorage(result.changedPageIds);
       }
 
       console.log(

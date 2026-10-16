@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { useCanvasStore } from '../../store/useCanvasStore';
+import { registerCanvasPageLeave, useCanvasStore } from '../../store/useCanvasStore';
 import { Viewport } from '../../canvas/engine/Viewport';
 import { BackgroundLayer } from './BackgroundLayer';
 import { TextOverlay } from '../text/TextOverlay';
@@ -89,6 +89,7 @@ export const InfiniteCanvas: React.FC = () => {
   const lastMouseChordTimeRef = useRef(0);
   const handleSinglePointerUpRef = useRef<((e: React.PointerEvent | PointerEvent) => void) | null>(null);
   const cancelActiveStrokeRef = useRef<(() => void) | null>(null);
+  const lastPointerEventRef = useRef<React.PointerEvent | PointerEvent | null>(null);
 
   // Сброс временных инлайн-стилей курсора при смене инструмента
   useEffect(() => {
@@ -895,6 +896,7 @@ export const InfiniteCanvas: React.FC = () => {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
+    useCanvasStore.getState().beginInteraction();
     const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     const worldPos = Viewport.screenToWorld(screenPos, camera, viewportSize);
 
@@ -1422,6 +1424,7 @@ export const InfiniteCanvas: React.FC = () => {
   };
 
   const handleSinglePointerUp = (e: React.PointerEvent | PointerEvent) => {
+    useCanvasStore.getState().endInteraction();
     if ((e.buttons & 1) === 0 || (e.buttons & 2) === 0) {
       isMouseChordActiveRef.current = false;
     }
@@ -1633,6 +1636,7 @@ export const InfiniteCanvas: React.FC = () => {
 
   // Отмена незавершённого одиночного штриха (буферизация при двухпальцевом жесте или palm rejection)
   const cancelActiveStroke = useCallback(() => {
+    useCanvasStore.getState().endInteraction();
     strokePointsRef.current = [];
     shapeAnchorRef.current = null;
     lassoPointsRef.current = [];
@@ -1653,6 +1657,19 @@ export const InfiniteCanvas: React.FC = () => {
   }, [renderSelectionAndCursorLayer]);
 
   const gestureManagerRef = useRef<GestureManager | null>(null);
+  useEffect(() => {
+    const unregister = registerCanvasPageLeave(() => {
+      const event = lastPointerEventRef.current;
+      if (event) handleSinglePointerUpRef.current?.(event);
+      gestureManagerRef.current?.reset();
+      cancelActiveStrokeRef.current?.();
+      dragInitialSnapshotRef.current = null;
+      eraserInitialStrokesRef.current = null;
+      eraserInitialShapesRef.current = null;
+      lastPointerEventRef.current = null;
+    });
+    return () => { unregister(); gestureManagerRef.current?.reset(); };
+  }, []);
 
   const gestureCallbacksRef = useRef({
     onPanZoom: ({ dx, dy, scale, screenCenter }: { dx: number; dy: number; scale: number; screenCenter: { x: number; y: number } }) => {
@@ -1740,10 +1757,12 @@ export const InfiniteCanvas: React.FC = () => {
   }, [drawWithTouch]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
+    lastPointerEventRef.current = e;
     gestureManagerRef.current?.handlePointerDown(e);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    lastPointerEventRef.current = e;
     gestureManagerRef.current?.handlePointerMove(e);
   };
 
