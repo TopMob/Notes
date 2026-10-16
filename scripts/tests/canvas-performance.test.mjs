@@ -3,6 +3,28 @@ import assert from 'node:assert/strict';
 import { getStroke } from 'perfect-freehand';
 import { loadTs } from './helpers/load-ts.mjs';
 
+test('asset leases protect shared images, release URLs and handle late loads after unmount', async () => {
+  let complete;
+  const { assetManager: assets } = loadTs('src/services/assets/assetManager.ts', {
+    '../../db/idb': {getDB: async()=>({get:()=>new Promise(resolve=>{complete=resolve;})})},
+    './imageCompression': {},
+  });
+  const first = assets.retain('shared'), second = assets.retain('shared');
+  const url = assets.registerAsset('shared',new Blob(['original']));
+  first(); await Promise.resolve(); assert.equal(assets.getUrl('shared'),url);
+  second(); await Promise.resolve(); assert.equal(assets.getUrl('shared'),null);
+  const release=assets.retain('late');
+  const loading=assets.getOrLoadUrl('late');
+  await Promise.resolve(); release(); await Promise.resolve();
+  complete({blob:new Blob(['late original'])});
+  assert.equal(await loading,null); assert.equal(assets.getUrl('late'),null);
+  const pinned=assets.retain('pinned'); assets.registerAsset('pinned',new Blob(['keep']));
+  for(let i=0;i<100;i++) assets.registerAsset(`old${i}`,new Blob(['x']));
+  assert.ok(assets.getUrl('pinned')); assert.equal(assets.getUrl('old0'),null);
+  pinned(); await Promise.resolve();
+  for(let i=0;i<100;i++) assets.revoke(`old${i}`);
+});
+
 test('incremental spatial index matches brute force across moves, deletes, snapshots and huge bounds', () => {
   const { SpatialIndex, aabbIntersects } = loadTs('src/canvas/engine/SpatialIndex.ts');
   const index = new SpatialIndex(); const items = new Map();

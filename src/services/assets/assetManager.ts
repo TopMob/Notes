@@ -6,6 +6,42 @@ class AssetManager {
   private urlCache = new Map<string, string>();
   private blobCache = new Map<string, Blob>();
   private pendingLoads = new Map<string, Promise<string | null>>();
+  private owners = new Map<string, number>();
+  private releaseQueued = new Set<string>();
+  private readonly maxCachedBytes = 32 * 1024 * 1024;
+  private readonly maxCachedAssets = 64;
+
+  /** A live image/export owns its URL; a released image can always reload its original. */
+  public retain(id: string): () => void {
+    this.releaseQueued.delete(id);
+    this.owners.set(id, (this.owners.get(id) || 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = (this.owners.get(id) || 1) - 1;
+      if (count > 0) this.owners.set(id, count);
+      else {
+        this.owners.delete(id);
+        this.releaseQueued.add(id);
+        // StrictMode/content effects can acquire the same asset again this turn.
+        queueMicrotask(() => {
+          if (this.pendingLoads.has(id)) return;
+          if (this.releaseQueued.delete(id) && !this.owners.has(id)) this.revoke(id);
+        });
+      }
+    };
+  }
+
+  private trimCache(protectedId: string): void {
+    let bytes = [...this.blobCache.values()].reduce((sum, blob) => sum + blob.size, 0);
+    for (const [id, blob] of this.blobCache) {
+      if (bytes <= this.maxCachedBytes && this.blobCache.size <= this.maxCachedAssets) break;
+      if (id === protectedId || this.owners.has(id)) continue;
+      bytes -= blob.size;
+      this.revoke(id);
+    }
+  }
 
   /**
    * Регистрирует Blob в оперативной памяти и создаёт быстрый ObjectURL.
@@ -19,6 +55,7 @@ class AssetManager {
       if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(ASSET_READY_EVENT, { detail: id }));
     }
     this.blobCache.set(id, blob);
+    this.trimCache(id);
     return url;
   }
 
@@ -33,6 +70,7 @@ class AssetManager {
     name?: string
   ): Promise<{ id: string; url: string; width: number; height: number }> {
     const id = `asset_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const release = this.retain(id);
     const url = this.registerAsset(id, fileOrBlob);
 
     let width = 0;
@@ -64,11 +102,14 @@ class AssetManager {
         createdAt: Date.now(),
       });
     } catch (err) {
+      release();
       this.revoke(id);
       console.error('[AssetManager] Failed to persist image:', err);
       throw new Error('Не удалось сохранить изображение на устройстве. Освободите место и повторите вставку.');
     }
 
+    // Allow the caller to mount the image and acquire its own lease.
+    setTimeout(release, 5000);
     return { id, url, width, height };
   }
 
@@ -95,12 +136,19 @@ class AssetManager {
         const db = await getDB();
         const record = await db.get('assets', id);
         if (record && record.blob) {
-          return this.registerAsset(id, record.blob);
+          const url = this.registerAsset(id, record.blob);
+          // An unmounted consumer may have released while IndexedDB was reading.
+          if (this.releaseQueued.has(id) && !this.owners.has(id)) {
+            this.revoke(id);
+            return null;
+          }
+          return url;
         }
       } catch (err) {
         console.warn(`[AssetManager] Error loading asset ${id}:`, err);
       } finally {
         this.pendingLoads.delete(id);
+        if (this.releaseQueued.delete(id) && !this.owners.has(id)) this.revoke(id);
       }
       return null;
     })();
@@ -120,6 +168,7 @@ class AssetManager {
       const record = await db.get('assets', id);
       if (record && record.blob) {
         this.blobCache.set(id, record.blob);
+        this.trimCache(id);
         return record.blob;
       }
     } catch {

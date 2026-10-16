@@ -132,30 +132,33 @@ export const TextBlockView = React.memo(function TextBlockView({
     });
   }, [block.contentHTML]);
 
-  // Автоматическая гидратация живых ObjectURL для изображений при загрузке или смене контента
+  // Keep live images owned while mounted, including asynchronous hydration.
   useEffect(() => {
     if (!contentRef.current) return;
-    const hydrate = (readyId?: string) => {
-      if (!contentRef.current) return;
-      const imgs = contentRef.current.querySelectorAll<HTMLImageElement>('img[data-asset-id]');
-      imgs.forEach(async (img) => {
-        const assetId = img.getAttribute('data-asset-id');
-        if (!assetId || readyId && assetId !== readyId) return;
-        const cachedUrl = assetManager.getUrl(assetId);
-        if (cachedUrl && img.src !== cachedUrl) {
-          img.src = cachedUrl;
-        } else if (!cachedUrl) {
-          const loadedUrl = await assetManager.getOrLoadUrl(assetId);
-          if (loadedUrl && img.isConnected && img.getAttribute('data-asset-id') === assetId && img.src !== loadedUrl) {
-            img.src = loadedUrl;
-          }
-        }
-      });
+    let active = true;
+    const images = new Map<string, HTMLImageElement[]>();
+    for (const img of contentRef.current.querySelectorAll<HTMLImageElement>('img[data-asset-id]')) {
+      const id = img.getAttribute('data-asset-id');
+      if (id) images.set(id, [...(images.get(id) || []), img]);
+    }
+    const release = [...images.keys()].map(id => assetManager.retain(id));
+    const hydrate = async (id: string) => {
+      const imgs = images.get(id);
+      if (!imgs) return;
+      const url = assetManager.getUrl(id) || await assetManager.getOrLoadUrl(id);
+      if (!active || !url) return;
+      for (const img of imgs) {
+        if (img.isConnected && img.getAttribute('data-asset-id') === id && img.src !== url) img.src = url;
+      }
     };
-    hydrate();
-    const onReady = (event: Event) => hydrate((event as CustomEvent<string>).detail);
+    for (const id of images.keys()) void hydrate(id);
+    const onReady = (event: Event) => { void hydrate((event as CustomEvent<string>).detail); };
     window.addEventListener(ASSET_READY_EVENT, onReady);
-    return () => window.removeEventListener(ASSET_READY_EVENT, onReady);
+    return () => {
+      active = false;
+      window.removeEventListener(ASSET_READY_EVENT, onReady);
+      release.forEach(dispose => dispose());
+    };
   }, [block.contentHTML]);
 
   // Перетаскивание блока за верхний хендл (только ЛКМ)
