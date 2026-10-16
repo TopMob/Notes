@@ -34,6 +34,30 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+test('move history changes only moved records, retains other edits and persists undo/redo diffs', async () => {
+  const writes=[]; const store=canvas(async (_,diff)=>writes.push(diff));
+  const first=stroke('moving'), other=stroke('untouched');
+  const text={id:'text',pageId:'p',x:0,y:0,width:400,contentHTML:'original',zIndex:10};
+  store.setState({strokes:[first,other],textBlocks:[text],selectedStrokeIds:['moving']});
+  store.getState().spatialIndex.sync([first,other]);
+  const before=store.getState();
+  store.getState().moveSelectedItems(10,20);
+  store.getState().commitMoveItems(before.strokes,before.shapes,before.textBlocks);
+  await store.getState().flushAllSaves();
+  assert.deepEqual(writes[0].strokes.put.map(s=>s.id),['moving']);
+  assert.equal(writes[0].textBlocks,undefined);
+  store.getState().updateTextBlock('text',{contentHTML:'keep newer text'});
+  store.getState().undo();
+  assert.equal(store.getState().strokes[0].points[0].x,1);
+  assert.equal(store.getState().textBlocks[0].contentHTML,'keep newer text');
+  assert.equal(store.getState().strokes[1],other);
+  await store.getState().flushAllSaves();
+  assert.equal(writes[1].strokes.put[0].points[0].x,1);
+  store.getState().redo(); await store.getState().flushAllSaves();
+  assert.equal(writes[2].strokes.put[0].points[0].x,11);
+  assert.equal(store.getState().textBlocks[0].contentHTML,'keep newer text');
+});
+
 test('failed local save retains edits, reports error and retries actual diff', async () => {
   const writes = []; let fail = true;
   const store = canvas(async (_, diff) => { writes.push(diff); if (fail) throw Error('QuotaExceededError'); });

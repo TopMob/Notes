@@ -1056,42 +1056,44 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     commitMoveItems: (prevStrokes, prevShapes, prevTextBlocks) => {
-      const currentStrokes = [...get().strokes];
-      const currentShapes = [...get().shapes];
-      const currentTextBlocks = [...get().textBlocks];
-      const pageId = get().currentPageId;
-
+      const state = get();
+      const pageId = state.currentPageId;
+      // Keep only changed records in history, never full-page snapshots.
+      const changed = <T extends { id: string }>(previous: T[], current: T[]) => {
+        const old = new Map(previous.map(item => [item.id, item]));
+        const after = current.filter(item => old.has(item.id) && old.get(item.id) !== item);
+        return { before: after.map(item => old.get(item.id)!), after };
+      };
+      const strokes = changed(prevStrokes, state.strokes);
+      const shapes = changed(prevShapes, state.shapes);
+      const text = changed(prevTextBlocks, state.textBlocks);
+      if (!strokes.after.length && !shapes.after.length && !text.after.length) return;
+      const apply = (nextStrokes: Stroke[], nextShapes: ShapeObject[], nextText: TextBlock[]) => {
+        if (get().currentPageId !== pageId) return;
+        const replace = <T extends { id: string }>(current: T[], updates: T[]) => {
+          if (!updates.length) return current;
+          const map = new Map(updates.map(item => [item.id, item]));
+          return current.map(item => map.get(item.id) || item);
+        };
+        set(current => {
+          for (const item of [...nextStrokes, ...nextShapes]) spatialIndex.insert(item);
+          return {
+            strokes: replace(current.strokes, nextStrokes),
+            shapes: replace(current.shapes, nextShapes),
+            textBlocks: replace(current.textBlocks, nextText),
+          };
+        });
+        if (pageId) {
+          const d = getOrCreateDirty(pageId);
+          for (const item of nextStrokes) { d.strokesPut.set(item.id, item); d.strokesDelete.delete(item.id); }
+          for (const item of nextShapes) { d.shapesPut.set(item.id, item); d.shapesDelete.delete(item.id); }
+          for (const item of nextText) { d.textBlocksPut.set(item.id, item); d.textBlocksDelete.delete(item.id); }
+          scheduleSave(pageId);
+        }
+      };
       globalCommandStack.execute({
-        execute: () => {
-          set({
-            strokes: currentStrokes,
-            shapes: currentShapes,
-            textBlocks: currentTextBlocks,
-          });
-          spatialIndex.sync([...currentStrokes, ...currentShapes]);
-          if (pageId) {
-            const d = getOrCreateDirty(pageId);
-            for (const s of currentStrokes) d.strokesPut.set(s.id, s);
-            for (const sh of currentShapes) d.shapesPut.set(sh.id, sh);
-            for (const tb of currentTextBlocks) d.textBlocksPut.set(tb.id, tb);
-            scheduleSave(pageId);
-          }
-        },
-        undo: () => {
-          set({
-            strokes: prevStrokes,
-            shapes: prevShapes,
-            textBlocks: prevTextBlocks,
-          });
-          spatialIndex.sync([...prevStrokes, ...prevShapes]);
-          if (pageId) {
-            const d = getOrCreateDirty(pageId);
-            for (const s of prevStrokes) d.strokesPut.set(s.id, s);
-            for (const sh of prevShapes) d.shapesPut.set(sh.id, sh);
-            for (const tb of prevTextBlocks) d.textBlocksPut.set(tb.id, tb);
-            scheduleSave(pageId);
-          }
-        },
+        execute: () => apply(strokes.after, shapes.after, text.after),
+        undo: () => apply(strokes.before, shapes.before, text.before),
         description: 'Перемещение объектов',
       });
     },
