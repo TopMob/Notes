@@ -1,6 +1,38 @@
 import { getStroke } from 'perfect-freehand';
 import { Stroke } from '../../types/canvas';
 
+// Points of committed strokes are immutable. Weak keys let the geometry disappear
+// together with its page/history, without retaining old pages in a global cache.
+const geometryCache = new WeakMap<Stroke['points'], {
+  width: number;
+  length: number;
+  outline: number[][];
+  path?: Path2D;
+}>();
+
+function getGeometry(stroke: Stroke) {
+  const cached = geometryCache.get(stroke.points);
+  if (cached && cached.width === stroke.baseWidth && cached.length === stroke.points.length) return cached;
+  const outline = getStroke(stroke.points.map(p => [p.x, p.y, p.pressure]), {
+    size: stroke.baseWidth,
+    thinning: 0,
+    smoothing: 0.6,
+    streamline: 0.4,
+    easing: t => t,
+    simulatePressure: false,
+  });
+  let path: Path2D | undefined;
+  if (outline.length >= 3 && typeof Path2D !== 'undefined') {
+    path = new Path2D();
+    path.moveTo(outline[0][0], outline[0][1]);
+    for (let i = 1; i < outline.length; i++) path.lineTo(outline[i][0], outline[i][1]);
+    path.closePath();
+  }
+  const geometry = { width: stroke.baseWidth, length: stroke.points.length, outline, path };
+  geometryCache.set(stroke.points, geometry);
+  return geometry;
+}
+
 /**
  * Отрисовка каллиграфического штриха на Canvas 2D контексте
  */
@@ -39,19 +71,15 @@ export function drawStrokeToCanvas(ctx: CanvasRenderingContext2D, stroke: Stroke
     return;
   }
 
-  const rawPoints = stroke.points.map((p) => [p.x, p.y, p.pressure]);
-
   try {
-    const outlinePoints = getStroke(rawPoints, {
-      size: stroke.baseWidth,
-      thinning: 0,
-      smoothing: 0.6,
-      streamline: 0.4,
-      easing: (t) => t,
-      simulatePressure: false,
-    });
+    const { outline: outlinePoints, path } = getGeometry(stroke);
 
     if (outlinePoints && outlinePoints.length >= 3) {
+      if (path) {
+        ctx.fill(path);
+        ctx.restore();
+        return;
+      }
       ctx.beginPath();
       ctx.moveTo(outlinePoints[0][0], outlinePoints[0][1]);
       for (let i = 1; i < outlinePoints.length; i++) {
