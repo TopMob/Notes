@@ -3,8 +3,6 @@ import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import katex from 'katex';
 import { GripHorizontal, X } from 'lucide-react';
 import { TextBlock } from '../../types/textblock';
-import { Camera, ViewportSize } from '../../types/canvas';
-import { Viewport } from '../../canvas/engine/Viewport';
 import { useCanvasStore } from '../../store/useCanvasStore';
 import { globalCommandStack } from '../../canvas/history/CommandStack';
 import { convertPowersToSuperscript, handlePowerKeyDown } from '../../utils/mathText';
@@ -13,10 +11,7 @@ import { escapeHtml } from '../../utils/html';
 
 interface TextBlockViewProps {
   block: TextBlock;
-  camera: Camera;
-  viewportSize: ViewportSize;
   isActive: boolean;
-  onSelect: () => void;
 }
 
 export const STRUCTURAL_SELECTORS =
@@ -35,20 +30,17 @@ export function isBlockEmpty(container: HTMLElement): boolean {
 /** Минимальная ширина текстового блока (мировые единицы) — можно сжимать почти до точки */
 export const MIN_TEXT_BLOCK_WIDTH = 24;
 
-export const TextBlockView: React.FC<TextBlockViewProps> = ({
+export const TextBlockView = React.memo(function TextBlockView({
   block,
-  camera,
-  viewportSize,
   isActive,
-  onSelect,
-}) => {
+}: TextBlockViewProps) {
   const { activeTool, updateTextBlock, removeTextBlock, setTextBlockHeight } = useCanvasStore(useShallow(state => ({
     activeTool: state.activeTool,
     updateTextBlock: state.updateTextBlock,
     removeTextBlock: state.removeTextBlock,
     setTextBlockHeight: state.setTextBlockHeight,
   })));
-  const screenPos = Viewport.worldToScreen({ x: block.x, y: block.y }, camera, viewportSize);
+  const onSelect = () => useCanvasStore.getState().setSelection([], [], [block.id]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -189,8 +181,8 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       handleDragPointerUp(e);
       return;
     }
-    const dx = (e.clientX - dragStart.x) / camera.zoom;
-    const dy = (e.clientY - dragStart.y) / camera.zoom;
+    const dx = (e.clientX - dragStart.x) / useCanvasStore.getState().camera.zoom;
+    const dy = (e.clientY - dragStart.y) / useCanvasStore.getState().camera.zoom;
 
     updateTextBlock(block.id, {
       x: Math.round(dragStart.blockX + dx),
@@ -244,7 +236,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       handleResizePointerUp(e);
       return;
     }
-    const dx = (e.clientX - resizeStart.startX) / camera.zoom;
+    const dx = (e.clientX - resizeStart.startX) / useCanvasStore.getState().camera.zoom;
     const newWidth = Math.max(MIN_TEXT_BLOCK_WIDTH, Math.round(resizeStart.initialWidth + dx));
 
     updateTextBlock(block.id, { width: newWidth });
@@ -322,7 +314,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       colgroup = document.createElement('colgroup');
       for (let i = 0; i < colCount; i++) {
         const col = document.createElement('col');
-        const measured = (firstRow.cells[i]?.offsetWidth || 120) / (camera.zoom || 1);
+        const measured = (firstRow.cells[i]?.offsetWidth || 120) / (useCanvasStore.getState().camera.zoom || 1);
         const widthEm = `${(Math.max(40, measured) / 16).toFixed(3)}em`;
         col.style.width = widthEm;
         col.style.minWidth = '3.5em';
@@ -349,7 +341,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         return;
       }
       const { cell, type, startX, startY, initialWidth, initialHeight } = tableResizeRef.current;
-      const curZoom = camera.zoom || 1;
+      const curZoom = useCanvasStore.getState().camera.zoom || 1;
 
       if (type === 'col') {
         const dx = (e.clientX - startX) / curZoom;
@@ -425,7 +417,7 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
         e.stopPropagation();
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
-        const curZoom = camera.zoom || 1;
+        const curZoom = useCanvasStore.getState().camera.zoom || 1;
         const tr = cell.parentElement as HTMLTableRowElement | null;
         const trRect = tr ? tr.getBoundingClientRect() : rect;
 
@@ -655,10 +647,9 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       className={`text-block-container ${isActive ? 'selected' : ''}`}
       style={{
         position: 'absolute',
-        left: `${screenPos.x}px`,
-        top: `${screenPos.y}px`,
+        left: `${block.x}px`,
+        top: `${block.y}px`,
         width: `${block.width}px`,
-        transform: `scale(${camera.zoom})`,
         transformOrigin: '0 0',
         zIndex: block.zIndex,
       }}
@@ -730,4 +721,4 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
       />
     </div>
   );
-};
+});
