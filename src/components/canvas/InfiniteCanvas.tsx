@@ -468,14 +468,16 @@ export const InfiniteCanvas: React.FC = () => {
     contentFrame.request(renderContentLayer);
   }, [contentFrame, renderContentLayer]);
 
+  const strokeMap = useMemo(() => new Map(strokes.map(stroke => [stroke.id, stroke])), [strokes]);
+  const shapeMap = useMemo(() => new Map(shapes.map(shape => [shape.id, shape])), [shapes]);
+  const tbMap = useMemo(() => new Map(textBlocks.map(block => [block.id, block])), [textBlocks]);
   // Находим общий bounding box для выделенных элементов
-  const computeSelectionBounds = useCallback((): { minX: number; minY: number; maxX: number; maxY: number } | null => {
+  const selectionBounds = useMemo((): { minX: number; minY: number; maxX: number; maxY: number } | null => {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
 
-    const strokeMap = new Map(strokes.map((s) => [s.id, s]));
     for (const id of selectedStrokeIds) {
       const s = strokeMap.get(id);
       if (s) {
@@ -486,7 +488,6 @@ export const InfiniteCanvas: React.FC = () => {
       }
     }
 
-    const shapeMap = new Map(shapes.map((sh) => [sh.id, sh]));
     for (const id of selectedShapeIds) {
       const sh = shapeMap.get(id);
       if (sh) {
@@ -497,7 +498,6 @@ export const InfiniteCanvas: React.FC = () => {
       }
     }
 
-    const tbMap = new Map(textBlocks.map((tb) => [tb.id, tb]));
     for (const id of selectedTextBlockIds) {
       const tb = tbMap.get(id);
       if (tb) {
@@ -511,7 +511,9 @@ export const InfiniteCanvas: React.FC = () => {
 
     if (minX === Infinity) return null;
     return { minX, minY, maxX, maxY };
-  }, [selectedStrokeIds, selectedShapeIds, selectedTextBlockIds, strokes, shapes, textBlocks, textBlockHeights]);
+  }, [selectedStrokeIds, selectedShapeIds, selectedTextBlockIds, strokeMap, shapeMap, tbMap, textBlockHeights]);
+
+  const computeSelectionBounds = useCallback(() => selectionBounds, [selectionBounds]);
 
   // Поиск элемента под курсором (для клика)
   const findItemAtPoint = useCallback((worldPos: { x: number; y: number }): Stroke | ShapeObject | null => {
@@ -560,10 +562,9 @@ export const InfiniteCanvas: React.FC = () => {
 
     // 1. Выделение линий (подсветка самой линии непосредственно вдоль штриха)
     if (selectedStrokeIds.length > 0) {
-      const allStrokes = useCanvasStore.getState().strokes;
       ctx.save();
       for (const id of selectedStrokeIds) {
-        const stroke = allStrokes.find((s) => s.id === id);
+        const stroke = strokeMap.get(id);
         if (!stroke || stroke.points.length < 2) continue;
 
         // Внешнее акцентное свечение вдоль штриха
@@ -669,6 +670,7 @@ export const InfiniteCanvas: React.FC = () => {
     }
   }, [
     computeSelectionBounds,
+    strokeMap,
     activeTool,
     camera,
     viewportSize,
