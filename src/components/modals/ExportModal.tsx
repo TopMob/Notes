@@ -78,9 +78,22 @@ export const ExportModal: React.FC = () => {
 
       const tiles = planPngTiles(width, height);
       const files: { name: string; blob: Blob }[] = [];
+      // 4. Отрисовка перьевых штрихов и фигур в хронологическом порядке
+      type VisualItem = { item: typeof strokes[0] | typeof shapes[0]; time: number; isStroke: boolean };
+      const items: VisualItem[] = [
+        ...strokes.filter((s) => s.tool !== 'highlighter').map((s) => ({ item: s, time: s.createdAt || 0, isStroke: true })),
+        ...shapes.map((sh) => ({ item: sh, time: sh.createdAt || (parseInt(sh.id.replace('shape-', ''), 10) || 0), isStroke: false })),
+      ];
+      items.sort((a, b) => a.time - b.time);
+
       for (const [index, tile] of tiles.entries()) {
         const tileMinX = minX - padding + tile.x, tileMinY = minY - padding + tile.y;
         const tileMaxX = tileMinX + tile.width, tileMaxY = tileMinY + tile.height;
+        const intersectsTile = (item: typeof strokes[number] | typeof shapes[number]) => {
+          const padding = 'baseWidth' in item ? item.baseWidth : item.style.width;
+          return item.bounds.minX - padding <= tileMaxX && item.bounds.maxX + padding >= tileMinX &&
+            item.bounds.minY - padding <= tileMaxY && item.bounds.maxY + padding >= tileMinY;
+        };
         offscreen.width = tile.width * 2; // Retina 2x
         offscreen.height = tile.height * 2;
         const ctx = offscreen.getContext('2d');
@@ -143,18 +156,11 @@ export const ExportModal: React.FC = () => {
 
         // 3. Отрисовка маркеров
         for (const s of strokes) {
-          if (s.tool === 'highlighter') drawStrokeToCanvas(ctx, s);
+          if (s.tool === 'highlighter' && intersectsTile(s)) drawStrokeToCanvas(ctx, s);
         }
 
-        // 4. Отрисовка перьевых штрихов и фигур в хронологическом порядке
-        type VisualItem = { item: typeof strokes[0] | typeof shapes[0]; time: number; isStroke: boolean };
-        const items: VisualItem[] = [
-          ...strokes.filter((s) => s.tool !== 'highlighter').map((s) => ({ item: s, time: s.createdAt || 0, isStroke: true })),
-          ...shapes.map((sh) => ({ item: sh, time: sh.createdAt || (parseInt(sh.id.replace('shape-', ''), 10) || 0), isStroke: false })),
-        ];
-        items.sort((a, b) => a.time - b.time);
-
         for (const entry of items) {
+          if (!intersectsTile(entry.item)) continue;
           if (entry.isStroke) {
             drawStrokeToCanvas(ctx, entry.item as typeof strokes[0]);
           } else {

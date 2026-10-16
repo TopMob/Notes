@@ -44,9 +44,11 @@ export async function zipFiles(files: {name:string;blob:Blob}[]): Promise<Blob> 
     const crc=await crc32(file.blob);
     const local=new Uint8Array(30+name.length); const l=new DataView(local.buffer);
     l.setUint32(0,0x04034b50,true); l.setUint16(4,20,true); l.setUint16(6,0x800,true);
+    l.setUint16(12,0x21,true); // DOS date: 1980-01-01, accepted by desktop extractors.
     l.setUint32(14,crc,true); l.setUint32(18,file.blob.size,true); l.setUint32(22,file.blob.size,true); l.setUint16(26,name.length,true); local.set(name,30);
     const central=new Uint8Array(46+name.length); const c=new DataView(central.buffer);
     c.setUint32(0,0x02014b50,true); c.setUint16(4,20,true); c.setUint16(6,20,true); c.setUint16(8,0x800,true);
+    c.setUint16(14,0x21,true);
     c.setUint32(16,crc,true); c.setUint32(20,file.blob.size,true); c.setUint32(24,file.blob.size,true); c.setUint16(28,name.length,true); c.setUint32(42,offset,true); central.set(name,46);
     parts.push(local,file.blob); directory.push(central); offset+=local.length+file.blob.size;
   }

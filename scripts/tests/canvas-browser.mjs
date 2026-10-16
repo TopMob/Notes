@@ -92,10 +92,11 @@ try {
   await page.evaluate(()=>window.stack.undo()); await matchFullDraw();
   await page.evaluate(()=>window.stack.redo()); await matchFullDraw();
   // Leaving during a held stroke commits it on the original page before loading.
+  const committedIds=await page.evaluate(()=>window.store.getState().strokes.map(s=>s.id));
   await page.mouse.move(100,300); await page.mouse.down(); await page.mouse.move(300,350,{steps:12});
   await page.evaluate(()=>window.store.getState().loadPage('other'));
   await page.mouse.up();
-  assert.ok(await page.evaluate(()=>window.writes.some(w=>w.id==='p' && w.diff.strokes?.put?.some(s=>s.points.length>=12))));
+  assert.ok(await page.evaluate(ids=>window.writes.some(w=>w.id==='p' && w.diff.strokes?.put?.some(s=>!ids.includes(s.id) && s.points.length>=12)),committedIds));
   assert.equal(await page.evaluate(()=>window.store.getState().currentPageId),'other');
   await page.evaluate(async()=>{
     const canvas=document.createElement('canvas');canvas.width=4;canvas.height=4;

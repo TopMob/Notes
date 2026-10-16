@@ -17,7 +17,7 @@ export const BackgroundLayer: React.FC<BackgroundLayerProps> = ({
   dpr,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const { theme } = useUiStore();
+  const theme = useUiStore(state => state.theme);
 
   useEffect(() => {
     const canvas = canvasRef.current;

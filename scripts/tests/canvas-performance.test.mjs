@@ -68,6 +68,9 @@ test('no-op camera, text and height updates publish nothing and create no dirty 
   store.getState().updateTextBlock('t',{x:1,contentHTML:'Keep'});
   store.getState().updateTextBlock('missing',{x:100});
   store.getState().clearSelection();
+  store.getState().setSelection([],[],[]);
+  store.getState().setBackground(store.getState().background);
+  store.getState().moveSelectedItems(0,0);
   assert.equal(notifications,0); assert.equal(store.getState().getEditRevision(),revision);
   await store.getState().flushAllSaves(); assert.equal(writes.length,0);
 });

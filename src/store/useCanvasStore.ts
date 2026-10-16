@@ -387,7 +387,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     saveError: null,
 
     setActiveTool: (tool) => {
-      set({ activeTool: tool });
+      if (get().activeTool !== tool) set({ activeTool: tool });
       if (tool !== 'cursor' && tool !== 'lasso') {
         get().clearSelection();
       }
@@ -417,6 +417,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     setBackground: (background) => {
+      if (get().background === background) return;
       set((state) => {
         const pageId = state.currentPageId;
         if (pageId) {
@@ -966,6 +967,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     setSelection: (strokeIds, shapeIds, textBlockIds) => {
+      const state = get();
+      const same = (a: string[], b: string[]) => a.length === b.length && a.every((id, index) => id === b[index]);
+      if (same(state.selectedStrokeIds, strokeIds) && same(state.selectedShapeIds, shapeIds) && same(state.selectedTextBlockIds, textBlockIds)) return;
       set({
         selectedStrokeIds: strokeIds,
         selectedShapeIds: shapeIds,
@@ -984,6 +988,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     moveSelectedItems: (dx, dy) => {
+      if (dx === 0 && dy === 0) return;
       const { selectedStrokeIds, selectedShapeIds, selectedTextBlockIds } = get();
       if (!selectedStrokeIds.length && !selectedShapeIds.length && !selectedTextBlockIds.length) return;
 
@@ -1215,8 +1220,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
 // Синхронизация состояния canUndo / canRedo с хранилищем
 globalCommandStack.subscribe(() => {
-  useCanvasStore.setState({
-    canUndo: globalCommandStack.canUndo(),
-    canRedo: globalCommandStack.canRedo(),
-  });
+  const canUndo = globalCommandStack.canUndo(), canRedo = globalCommandStack.canRedo();
+  useCanvasStore.setState(state => state.canUndo === canUndo && state.canRedo === canRedo ? state : { canUndo, canRedo });
 });

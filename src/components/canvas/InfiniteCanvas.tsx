@@ -152,7 +152,10 @@ export const InfiniteCanvas: React.FC = () => {
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
-          setViewportSize({ w: Math.round(rect.width), h: Math.round(rect.height) });
+          setViewportSize(previous => {
+            const w = Math.round(rect.width), h = Math.round(rect.height);
+            return previous.w === w && previous.h === h ? previous : { w, h };
+          });
         }
       }
       setDpr(window.devicePixelRatio || 1);
@@ -167,7 +170,10 @@ export const InfiniteCanvas: React.FC = () => {
         for (const entry of entries) {
           const { width, height } = entry.contentRect;
           if (width > 0 && height > 0) {
-            setViewportSize({ w: Math.round(width), h: Math.round(height) });
+            setViewportSize(previous => {
+            const w = Math.round(width), h = Math.round(height);
+            return previous.w === w && previous.h === h ? previous : { w, h };
+          });
           }
         }
       });
@@ -186,7 +192,10 @@ export const InfiniteCanvas: React.FC = () => {
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
-          setViewportSize({ w: Math.round(rect.width), h: Math.round(rect.height) });
+          setViewportSize(previous => {
+            const w = Math.round(rect.width), h = Math.round(rect.height);
+            return previous.w === w && previous.h === h ? previous : { w, h };
+          });
         }
       }
     }, 30);
@@ -751,6 +760,7 @@ export const InfiniteCanvas: React.FC = () => {
       eraserInitialShapesRef.current = null;
     }
     if (dragInitialSnapshotRef.current) {
+      useCanvasStore.getState().spatialIndex.sync([...dragInitialSnapshotRef.current.strokes, ...dragInitialSnapshotRef.current.shapes]);
       useCanvasStore.setState({
         strokes: dragInitialSnapshotRef.current.strokes,
         shapes: dragInitialSnapshotRef.current.shapes,
@@ -1375,31 +1385,31 @@ export const InfiniteCanvas: React.FC = () => {
       }
 
       previewFrame.request(() => {
-      // Отрисовываем текущий штрих на activeCanvas
-      const activeCanvas = activeCanvasRef.current;
-      if (activeCanvas) {
-        const ctx = activeCanvas.getContext('2d');
-        if (ctx) {
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
-          Viewport.applyTransform(ctx, camera, viewportSize, dpr);
+        // Отрисовываем текущий штрих на activeCanvas
+        const activeCanvas = activeCanvasRef.current;
+        if (activeCanvas) {
+          const ctx = activeCanvas.getContext('2d');
+          if (ctx) {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
+            Viewport.applyTransform(ctx, camera, viewportSize, dpr);
 
-          const tempStroke: Stroke = {
-            id: 'temp',
-            pageId: currentPageId || 'page-default',
-            tool: activeTool,
-            points: strokePointsRef.current,
-            color: activeTool === 'pen' ? penColor : highlighterColor,
-            baseWidth: activeTool === 'pen' ? penWidth : highlighterWidth,
-            opacity: activeTool === 'pen' ? 1.0 : 0.35,
-            blendMode: activeTool === 'pen' ? 'source-over' : 'multiply',
-            bounds: strokeBoundsRef.current,
-            createdAt: Date.now(),
-          };
+            const tempStroke: Stroke = {
+              id: 'temp',
+              pageId: currentPageId || 'page-default',
+              tool: activeTool,
+              points: strokePointsRef.current,
+              color: activeTool === 'pen' ? penColor : highlighterColor,
+              baseWidth: activeTool === 'pen' ? penWidth : highlighterWidth,
+              opacity: activeTool === 'pen' ? 1.0 : 0.35,
+              blendMode: activeTool === 'pen' ? 'source-over' : 'multiply',
+              bounds: strokeBoundsRef.current,
+              createdAt: Date.now(),
+            };
 
-          drawStrokeToCanvas(ctx, tempStroke);
+            drawStrokeToCanvas(ctx, tempStroke);
+          }
         }
-      }
       });
       return;
     }
@@ -1407,33 +1417,33 @@ export const InfiniteCanvas: React.FC = () => {
     // Фигуры
     if (activeTool === 'shape' && shapeAnchorRef.current) {
       previewFrame.request(() => {
-      if (!shapeAnchorRef.current) return;
-      const activeCanvas = activeCanvasRef.current;
-      if (activeCanvas) {
-        const ctx = activeCanvas.getContext('2d');
-        if (ctx) {
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
-          Viewport.applyTransform(ctx, camera, viewportSize, dpr);
+        if (!shapeAnchorRef.current) return;
+        const activeCanvas = activeCanvasRef.current;
+        if (activeCanvas) {
+          const ctx = activeCanvas.getContext('2d');
+          if (ctx) {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, activeCanvas.width, activeCanvas.height);
+            Viewport.applyTransform(ctx, camera, viewportSize, dpr);
 
-          const endPt = e.shiftKey
-            ? snapShapeEndPoint(shapeAnchorRef.current, { ...worldPos, pressure: 0.5, t: 0 }, shapeType)
-            : { ...worldPos, pressure: 0.5, t: 0 };
+            const endPt = e.shiftKey
+              ? snapShapeEndPoint(shapeAnchorRef.current, { ...worldPos, pressure: 0.5, t: 0 }, shapeType)
+              : { ...worldPos, pressure: 0.5, t: 0 };
 
-          const tempShape: ShapeObject = {
-            id: 'temp-shape',
-            pageId: currentPageId || '',
-            type: shapeType,
-            ...(shapeType === 'axis' ? { axisMode: 'four-quadrant' as const } : {}),
-            anchor: shapeAnchorRef.current,
-            end: endPt,
-            style: { color: shapeColor, width: shapeWidth },
-            bounds: computeShapeBounds(shapeAnchorRef.current, endPt, shapeWidth),
-          };
+            const tempShape: ShapeObject = {
+              id: 'temp-shape',
+              pageId: currentPageId || '',
+              type: shapeType,
+              ...(shapeType === 'axis' ? { axisMode: 'four-quadrant' as const } : {}),
+              anchor: shapeAnchorRef.current,
+              end: endPt,
+              style: { color: shapeColor, width: shapeWidth },
+              bounds: computeShapeBounds(shapeAnchorRef.current, endPt, shapeWidth),
+            };
 
-          drawShapeToCanvas(ctx, tempShape);
+            drawShapeToCanvas(ctx, tempShape);
+          }
         }
-      }
       });
       return;
     }
@@ -1443,28 +1453,28 @@ export const InfiniteCanvas: React.FC = () => {
       lassoPointsRef.current.push({ ...worldPos, pressure: 0.5, t: Date.now() });
 
       previewFrame.request(() => {
-      const selCanvas = selectionCanvasRef.current;
-      if (selCanvas) {
-        const ctx = selCanvas.getContext('2d');
-        if (ctx) {
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.clearRect(0, 0, selCanvas.width, selCanvas.height);
-          Viewport.applyTransform(ctx, camera, viewportSize, dpr);
+        const selCanvas = selectionCanvasRef.current;
+        if (selCanvas) {
+          const ctx = selCanvas.getContext('2d');
+          if (ctx) {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+            Viewport.applyTransform(ctx, camera, viewportSize, dpr);
 
-          ctx.save();
-          ctx.strokeStyle = '#7719aa';
-          ctx.lineWidth = 1.5 / camera.zoom;
-          ctx.setLineDash([4 / camera.zoom, 4 / camera.zoom]);
-          ctx.beginPath();
-          for (let i = 0; i < lassoPointsRef.current.length; i++) {
-            const p = lassoPointsRef.current[i];
-            if (i === 0) ctx.moveTo(p.x, p.y);
-            else ctx.lineTo(p.x, p.y);
+            ctx.save();
+            ctx.strokeStyle = '#7719aa';
+            ctx.lineWidth = 1.5 / camera.zoom;
+            ctx.setLineDash([4 / camera.zoom, 4 / camera.zoom]);
+            ctx.beginPath();
+            for (let i = 0; i < lassoPointsRef.current.length; i++) {
+              const p = lassoPointsRef.current[i];
+              if (i === 0) ctx.moveTo(p.x, p.y);
+              else ctx.lineTo(p.x, p.y);
+            }
+            ctx.stroke();
+            ctx.restore();
           }
-          ctx.stroke();
-          ctx.restore();
         }
-      }
       });
       return;
     }
