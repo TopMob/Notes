@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { SignJWT, generateKeyPair } from 'jose';
 import { authenticate, clerkIssuer } from '../../server/sync-auth.mjs';
-import { commit, pull, pullEntities, ensureAssets, putAsset, completeAsset, assetManifest, pack, decode } from '../../server/turso-sync.mjs';
+import { commit, pull, pullEntities, pullChanges, ensureAssets, putAsset, completeAsset, assetManifest, pack, decode } from '../../server/turso-sync.mjs';
 import { getSyncClock } from '../../server/sync-clock.mjs';
 import { versionHash, cloudElementsFor } from '../../src/services/sync/protocol.mjs';
 import { createSnapshotTransfer, readSnapshotPart, uploadCommitPart, readCommitTransfer, releaseTransfer, TRANSFER_PART_SIZE } from '../../server/sync-transfer.mjs';
@@ -20,6 +20,15 @@ function transportProvider() {
   }, module, module.exports);
   const provider = new module.exports.TursoProvider(); provider.setTokenProvider(async () => 'fixture');
   return provider;
+}
+
+async function twoPages() {
+  const f = await fixture();
+  const first = await commit(f.client, 'u', { entity: 'pages', id: 'p', action: 'put', expected: null, record: f.page, elements: f.elements });
+  const secondPage = { ...f.page, id: 'q', title: 'Second' };
+  const secondElements = { ...f.elements, textBlocks: [{ ...f.elements.textBlocks[0], id: 'tq', pageId: 'q' }] };
+  const second = await commit(f.client, 'u', { entity: 'pages', id: 'q', action: 'put', expected: null, record: secondPage, elements: secondElements });
+  return { ...f, first, second, secondPage, secondElements, known: [{ id: 'p', revision: first.revision }, { id: 'q', revision: second.revision }] };
 }
 
 async function fixture() {
@@ -285,4 +294,82 @@ test('client rejects missing or corrupt snapshot parts before exposing any cloud
     globalThis.fetch = async () => Response.json({ transfer: { id, hash, total: 2, part: 0, data: payload } });
     await assert.rejects(provider.pullAll('u'), /Неполный снимок/);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('SHA-256 delta sends only the changed page and includes deletions without losing unchanged metadata', async () => {
+  const { client, known, first, second, secondPage, secondElements } = await twoPages();
+  try {
+    const unchanged = await pullChanges(client, 'u', known);
+    assert.equal(unchanged.pages.length, 2);
+    assert.equal(unchanged.elements.length, 0);
+    assert.deepEqual(new Set(unchanged.omittedPages.map(row => row.id)), new Set(['p', 'q']));
+    const edited = { ...secondElements, textBlocks: [{ ...secondElements.textBlocks[0], contentHTML: '<p>Device B edit, same count</p>' }] };
+    const changed = await commit(client, 'u', { entity: 'pages', id: 'q', action: 'put', expected: second.revision, record: secondPage, elements: edited });
+    const delta = await pullChanges(client, 'u', known);
+    assert.deepEqual(delta.omittedPages, [{ id: 'p', revision: first.revision }]);
+    assert.deepEqual(cloudElementsFor(delta, 'q'), edited);
+    assert.equal(delta.elements.some(row => row.pageId === 'p'), false);
+    assert.equal(delta.syncToken, changed.syncToken);
+    await assert.rejects(commit(client, 'u', { entity: 'pages', id: 'q', action: 'put', expected: second.revision, record: secondPage, elements: secondElements }), error => error.status === 409);
+    await commit(client, 'u', { entity: 'pages', id: 'q', action: 'delete', expected: changed.revision });
+    const deleted = await pullChanges(client, 'u', [{ id: 'p', revision: first.revision }, { id: 'q', revision: changed.revision }]);
+    assert.ok(deleted.pages.find(row => row.id === 'q').deletedAt);
+    assert.deepEqual(deleted.omittedPages, [{ id: 'p', revision: first.revision }]);
+  } finally { client.close(); }
+});
+
+test('warm SHA cache avoids reading unchanged canvas payloads and legacy edits invalidate only their own page', async () => {
+  const { client, known, elements, first } = await twoPages();
+  try {
+    let canvasReads = 0;
+    const wrapped = { batch: client.batch.bind(client), execute: client.execute.bind(client), transaction: async mode => {
+      const tx = await client.transaction(mode);
+      return { execute: statement => { if (/SELECT \* FROM page_elements/.test(statement.sql)) canvasReads++; return tx.execute(statement); }, commit: tx.commit.bind(tx), close: tx.close.bind(tx) };
+    } };
+    await pullChanges(wrapped, 'u', known);
+    assert.equal(canvasReads, 0);
+    const altered = { ...elements, textBlocks: [{ ...elements.textBlocks[0], contentHTML: '<p>Legacy client edit</p>' }] };
+    await client.execute({ sql: 'UPDATE page_elements SET data=? WHERE user_id=? AND page_id=?', args: [pack(altered), 'u', 'p'] });
+    assert.deepEqual((await client.execute({ sql: 'SELECT page_id FROM notes_page_revisions_v1 WHERE user_id=?', args: ['u'] })).rows.map(row => row.page_id), ['q']);
+    const delta = await pullChanges(wrapped, 'u', known);
+    assert.equal(canvasReads, 2, 'one backfill read and one outgoing changed-page read');
+    assert.deepEqual(cloudElementsFor(delta, 'p'), altered);
+    assert.deepEqual(delta.omittedPages.map(row => row.id), ['q']);
+    const cached = (await client.execute({ sql: 'SELECT revision FROM notes_page_revisions_v1 WHERE user_id=? AND page_id=?', args: ['u', 'p'] })).rows[0].revision;
+    assert.notEqual(cached, first.revision);
+    assert.equal(cached, await versionHash('pages', delta.pages.find(row => row.id === 'p'), altered));
+    canvasReads = 0;
+    await pullChanges(wrapped, 'u', [{ id: 'p', revision: cached }, known[1]]);
+    assert.equal(canvasReads, 0);
+  } finally { client.close(); }
+});
+
+test('SHA delta preserves orphan content, isolates accounts, and rejects malformed hash manifests', async () => {
+  const { client, known, elements } = await twoPages();
+  try {
+    await client.execute({ sql: 'DELETE FROM pages WHERE user_id=? AND id=?', args: ['u', 'p'] });
+    const orphan = await pullChanges(client, 'u', known);
+    assert.deepEqual(cloudElementsFor(orphan, 'p'), elements);
+    assert.equal(orphan.omittedPages.some(row => row.id === 'p'), false);
+    const other = await pullChanges(client, 'other', known);
+    assert.equal(other.pages.length, 0); assert.equal(other.elements.length, 0); assert.equal(other.omittedPages.length, 0);
+    await assert.rejects(pullChanges(client, 'u', [known[0], known[0]]), error => error.status === 400);
+    await assert.rejects(pullChanges(client, 'u', [{ id: 'p', revision: 'wrong' }]), error => error.status === 400);
+  } finally { client.close(); }
+});
+
+test('actual client transport sends known SHA revisions and receives metadata without unchanged content', async () => {
+  const { client, known } = await twoPages();
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (_path, options) => {
+      const body = JSON.parse(options.body);
+      assert.deepEqual(body.knownPages, known);
+      return Response.json({ payload: pack(await pullChanges(client, 'u', body.knownPages)) });
+    };
+    const result = await transportProvider().pullChanges('u', known);
+    assert.equal(result.pages.length, 2);
+    assert.equal(result.elements.length, 0);
+    assert.equal(result.omittedPages.length, 2);
+  } finally { globalThis.fetch = originalFetch; client.close(); }
 });

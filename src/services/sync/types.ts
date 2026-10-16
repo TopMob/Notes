@@ -20,6 +20,7 @@ export interface SyncPayload {
 }
 
 export interface CloudPullResult {
+  omittedPages?: { id: string; revision: string }[];
   syncToken?: string;
   guarded?: boolean;
   completePageIds?: string[];
@@ -56,6 +57,7 @@ export interface ISyncProvider {
   commit?(userId: string, operation: GuardedOperation): Promise<{ revision: string | null; previousSyncToken?: string; syncToken?: string }>;
   getSyncToken?(userId: string): Promise<string>;
   pullEntities?(userId: string, entities: { entity: 'notebooks' | 'sections' | 'pages'; id: string }[]): Promise<CloudPullResult>;
+  pullChanges?(userId: string, knownPages: { id: string; revision: string }[]): Promise<CloudPullResult>;
   uploadAsset?(id: string, blob: Blob): Promise<void>;
   downloadAsset?(id: string): Promise<Blob>;
   name: SyncProviderType;

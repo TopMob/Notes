@@ -3,6 +3,7 @@ import type { OneNoteDB } from '../../db/idb';
 import type { OutboxEntity, OutboxEntry } from './outbox';
 import type { SyncBinding } from './outboxContext';
 import type { PageElementsBundle } from './compression';
+import { localSyncEpoch } from './localEpoch';
 
 export interface GuardedOperation { entity: OutboxEntity; id: string; action: 'put' | 'delete'; expected: string | null; record?: any; elements?: PageElementsBundle }
 export interface RevisionState {
@@ -14,6 +15,7 @@ export interface RevisionState {
   entityId: string;
   base: string | null;
   contentBase?: string | null;
+  localEpoch?: string;
   conflict?: boolean;
   alternatives?: { hash: string | null; record: any }[];
 }
@@ -24,7 +26,7 @@ export async function getRevision(db: IDBPDatabase<OneNoteDB>, binding: SyncBind
 export async function putRevision(tx: IDBPTransaction<OneNoteDB, any, 'readwrite'>, binding: SyncBinding, entity: OutboxEntity, id: string, base: string | null, conflict = false, contentBase?: string | null) {
   const key = revisionKey(binding, entity, id);
   const previous = await tx.objectStore('syncOutbox').get(key) as RevisionState | undefined;
-  await tx.objectStore('syncOutbox').put({ ...previous, key, provider: 'state', bindingProvider: binding.provider, userId: binding.userId, entity, entityId: id, base, contentBase, conflict });
+  await tx.objectStore('syncOutbox').put({ ...previous, key, provider: 'state', bindingProvider: binding.provider, userId: binding.userId, entity, entityId: id, base, contentBase, localEpoch: localSyncEpoch(), conflict });
 }
 export async function flagConflict(db: IDBPDatabase<OneNoteDB>, entry: OutboxEntry) {
   const tx = db.transaction('syncOutbox', 'readwrite');

@@ -5,6 +5,7 @@ import { getSyncBinding } from './outboxContext';
 import type { SyncBinding } from './outboxContext';
 import { revisionKey, putRevision } from './revisionState';
 import type { RevisionState } from './revisionState';
+import { invalidateLocalSyncEpoch } from './localEpoch';
 
 export type OutboxEntity = 'notebooks' | 'sections' | 'pages';
 export const outboxSessionId = crypto.randomUUID();
@@ -21,7 +22,7 @@ export interface OutboxEntry extends SyncBinding {
 type WriteTransaction = IDBPTransaction<OneNoteDB, any, 'readwrite'>;
 
 export async function queueLocalChange(tx: WriteTransaction, entity: OutboxEntity, entityId: string, action: OutboxEntry['action'] = 'put', binding = getSyncBinding()): Promise<void> {
-  if (!binding) return;
+  if (!binding) { invalidateLocalSyncEpoch(); return; }
   void tx.done.catch(() => {});
   try {
     const key = JSON.stringify([binding.provider, binding.userId, entity, entityId]);

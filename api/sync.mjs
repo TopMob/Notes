@@ -1,6 +1,6 @@
 import { createClient } from '@libsql/client';
 import { authenticate } from '../server/sync-auth.mjs';
-import { pull, pullEntities, commit, ensureAssets, putAsset, assetManifest, decode, pack, SyncError } from '../server/turso-sync.mjs';
+import { pull, pullEntities, pullChanges, commit, ensureAssets, putAsset, assetManifest, decode, pack, SyncError } from '../server/turso-sync.mjs';
 import { getSyncClock } from '../server/sync-clock.mjs';
 import { createSnapshotTransfer, readSnapshotPart, uploadCommitPart, readCommitTransfer, releaseTransfer } from '../server/sync-transfer.mjs';
 let client;
@@ -35,7 +35,7 @@ export default async function handler(req, res) {
       if (!body || Buffer.byteLength(JSON.stringify(body)) > 3 * 1024 * 1024) throw new SyncError(413, 'Облачный пакет слишком большой; локальные данные сохранены');
       if (body.action === 'clock') return res.status(200).json({ token: await getSyncClock(db, userId) });
       if (body.action === 'pull') {
-        const payload = pack(await (body.entities === undefined ? pull(db, userId) : pullEntities(db, userId, body.entities)));
+        const payload = pack(await (body.entities !== undefined ? pullEntities(db, userId, body.entities) : body.knownPages !== undefined ? pullChanges(db, userId, body.knownPages) : pull(db, userId)));
         if (body.transport === 'chunks-v1' && payload.length > 512 * 1024) return res.status(200).json({ transfer: await createSnapshotTransfer(db, userId, payload) });
         if (Buffer.byteLength(payload) > 3 * 1024 * 1024) throw new SyncError(413, 'Снимок превышает лимит передачи. Локальные заметки сохранены.');
         return res.status(200).json({ payload });

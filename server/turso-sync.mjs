@@ -2,6 +2,7 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { versionHash, assetIds, portableElements } from '../src/services/sync/protocol.mjs';
 import { getSyncClock, readSyncClock } from './sync-clock.mjs';
+import { ensurePageRevisions, savePageRevision } from './page-revisions.mjs';
 
 export class SyncError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -55,6 +56,41 @@ export async function pullEntities(client, userId, entities) {
   });
   return pullResult(await client.batch([...queries, { sql: 'SELECT token FROM notes_sync_clock WHERE user_id=?', args: [userId] }], 'read'));
 }
+export async function pullChanges(client, userId, knownPages) {
+  if (!Array.isArray(knownPages) || knownPages.length > 20000 || knownPages.some(row => !row || !validId(row.id) || !/^[a-f0-9]{64}$/.test(row.revision || '')) || new Set(knownPages.map(row => row.id)).size !== knownPages.length) throw new SyncError(400, 'Некорректный список ревизий страниц');
+  await getSyncClock(client, userId);
+  await ensurePageRevisions(client);
+  const tx = await client.transaction('write');
+  try {
+    const metadata = [];
+    for (const table of ['notebooks', 'sections', 'pages']) metadata.push(await tx.execute({ sql: `SELECT * FROM ${table} WHERE user_id=?`, args: [userId] }));
+    const orphanIds = await tx.execute({ sql: 'SELECT DISTINCT page_id FROM page_elements WHERE user_id=?', args: [userId] });
+    const pageIds = new Set([...metadata[2].rows.map(row => String(row.id)), ...orphanIds.rows.map(row => String(row.page_id))]);
+    const cached = await tx.execute({ sql: 'SELECT page_id,revision FROM notes_page_revisions_v1 WHERE user_id=?', args: [userId] });
+    const revisions = new Map(cached.rows.map(row => [String(row.page_id), row.revision]));
+    for (const id of pageIds) if (!revisions.has(id)) {
+      // Legacy/direct writes invalidate only the affected page. Backfill it once.
+      const value = await current(tx, userId, 'pages', id);
+      const revision = await versionHash('pages', value.record, value.elements);
+      await savePageRevision(tx, userId, id, revision);
+      revisions.set(id, revision);
+    }
+    const known = new Map(knownPages.map(row => [row.id, row.revision]));
+    const omittedPages = metadata[2].rows.filter(row => !row.deleted_at && known.has(String(row.id)) && known.get(String(row.id)) === revisions.get(String(row.id))).map(row => ({ id: String(row.id), revision: revisions.get(String(row.id)) }));
+    const omitted = new Set(omittedPages.map(row => row.id));
+    const wanted = [...pageIds].filter(id => !omitted.has(id));
+    const rows = [];
+    for (let offset = 0; offset < wanted.length; offset += 256) {
+      const ids = wanted.slice(offset, offset + 256);
+      const result = await tx.execute({ sql: `SELECT * FROM page_elements WHERE user_id=? AND page_id IN (${ids.map(() => '?').join(',')})`, args: [userId, ...ids] });
+      rows.push(...result.rows);
+    }
+    const token = await readSyncClock(tx, userId);
+    const result = { ...pullResult([...metadata, { rows }, { rows: [{ token }] }]), omittedPages };
+    await tx.commit();
+    return result;
+  } finally { tx.close(); }
+}
 function validId(id) { return typeof id === 'string' && id.length > 0 && id.length <= 300; }
 function validateWrite(input) {
   if (!input || !tables.has(input.entity) || !validId(input.id) || !['put', 'delete'].includes(input.action) || input.expected !== null && !/^[a-f0-9]{64}$/.test(input.expected || '')) throw new SyncError(400, 'Некорректная операция');
@@ -92,6 +128,7 @@ async function current(tx, userId, entity, id) {
 export async function commit(client, userId, input) {
   validateWrite(input);
   await getSyncClock(client, userId);
+  await ensurePageRevisions(client);
   const elements = input.entity === 'pages' ? portableElements(input.elements) : undefined;
   // Compression and validation precede the write lock.
   const packed = elements ? `gz:${gzipSync(JSON.stringify({ schema_version: 2, ...elements })).toString('base64')}` : null;
@@ -99,11 +136,15 @@ export async function commit(client, userId, input) {
   try {
     const previousSyncToken = await readSyncClock(tx, userId);
     const existing = await current(tx, userId, input.entity, input.id);
-    const actual = await versionHash(input.entity, existing.record, existing.elements);
+    const cached = input.entity === 'pages' ? await tx.execute({ sql: 'SELECT revision FROM notes_page_revisions_v1 WHERE user_id=? AND page_id=?', args: [userId, input.id] }) : null;
+    const actual = cached?.rows.length ? cached.rows[0].revision : await versionHash(input.entity, existing.record, existing.elements);
     const desiredRecord = input.action === 'delete' ? existing.record && { ...existing.record, deletedAt: 1 } : { ...input.record, deletedAt: null };
     const desired = await versionHash(input.entity, desiredRecord, elements);
     // A lost response may be retried without rewriting already committed content.
-    if (actual === desired) { await tx.commit(); return { revision: actual, previousSyncToken, syncToken: previousSyncToken }; }
+    if (actual === desired) {
+      if (input.entity === 'pages') await savePageRevision(tx, userId, input.id, actual);
+      await tx.commit(); return { revision: actual, previousSyncToken, syncToken: previousSyncToken };
+    }
     if (actual !== input.expected) throw new SyncError(409, 'Облако изменилось на другом устройстве. Обе версии сохранены; выберите вариант в настройках синхронизации.');
     const now = Date.now();
     if (input.action === 'delete') {
@@ -130,6 +171,7 @@ export async function commit(client, userId, input) {
     }
     const final = await current(tx, userId, input.entity, input.id);
     const revision = await versionHash(input.entity, final.record, final.elements);
+    if (input.entity === 'pages') await savePageRevision(tx, userId, input.id, revision);
     const syncToken = await readSyncClock(tx, userId);
     await tx.commit(); return { revision, previousSyncToken, syncToken };
   } finally { tx.close(); }

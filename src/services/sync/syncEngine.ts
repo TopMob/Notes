@@ -17,6 +17,8 @@ import type { OutboxEntry } from './outbox';
 import { applyVersionedPull } from './revisionPull';
 import { listConflicts, resolveConflict } from './conflicts';
 import type { OutboxEntity } from './outbox';
+import type { RevisionState } from './revisionState';
+import { invalidateLocalSyncEpoch, localSyncEpoch } from './localEpoch';
 
 interface SyncStoreState {
   providerType: SyncProviderType;
@@ -34,8 +36,6 @@ interface SyncStoreState {
 
 const STORAGE_PROVIDER_KEY = 'onenote_sync_provider';
 const STORAGE_LAST_SYNCED_KEY = 'onenote_last_synced_at';
-const LOCAL_SYNC_EPOCH_KEY = 'onenote_sync_local_epoch';
-const localSyncEpoch = () => localStorage.getItem(LOCAL_SYNC_EPOCH_KEY) || '';
 const isVersionConflictMessage = (message: string | null) => !!message && [
   'Различаются версии ', 'Есть разные версии заметок.',
   'Облако изменилось во время отправки.',
@@ -56,6 +56,7 @@ export const useSyncStore = create<SyncStoreState>((set) => ({
   errorMessage: null,
 
   setProviderType: (type) => {
+    if (type !== useSyncStore.getState().providerType) syncEngine.invalidateCloudCheckpoints();
     localStorage.setItem(STORAGE_PROVIDER_KEY, type);
     set({ providerType: type });
   },
@@ -79,11 +80,20 @@ export const useSyncStore = create<SyncStoreState>((set) => ({
 class SyncEngine {
   // Session-only: a reload or a cleared local database always requires a full check.
   private cloudCheckpoints = new Map<string, { token: string; localEpoch: string }>();
+  private async pullForSync(provider: ISyncProvider, userId: string, pages: Page[]) {
+    if (!provider.pullChanges) return provider.pullAll(userId);
+    const rows = await (await getDB()).getAll('syncOutbox');
+    const blocked = new Set(rows.filter(row => row.provider === provider.name && row.userId === userId && row.entity === 'pages').map(row => row.entityId));
+    for (const id of useCanvasStore.getState().getUnsavedPageIds()) blocked.add(id);
+    const localIds = new Set(pages.map(page => page.id));
+    const known = rows.filter((row): row is RevisionState => row.provider === 'state' && row.bindingProvider === provider.name && row.userId === userId && row.entity === 'pages' && row.localEpoch === localSyncEpoch() && !!row.base && !row.conflict && localIds.has(row.entityId) && !blocked.has(row.entityId));
+    return provider.pullChanges(userId, known.map(row => ({ id: row.entityId, revision: row.base! })));
+  }
   public invalidateCloudCheckpoints() {
     this.cloudCheckpoints.clear();
     this.changeRevision++;
     // Other tabs sharing this database must also discard their short-check cache.
-    try { localStorage.setItem(LOCAL_SYNC_EPOCH_KEY, crypto.randomUUID()); } catch {}
+    invalidateLocalSyncEpoch();
   }
   private operationTail: Promise<void> = Promise.resolve();
   private fullSyncPromise: Promise<SyncStats> | null = null;
@@ -435,7 +445,7 @@ class SyncEngine {
       }
 
       // 3. Получаем все данные из облака
-      let cloudData = await provider.pullAll(userId);
+      let cloudData = await this.pullForSync(provider, userId, localPages);
       validateCloudPull(cloudData);
       if (snapshotRevision !== this.changeRevision || snapshotEdits !== useCanvasStore.getState().getEditRevision()) throw new Error('Во время загрузки облака появились локальные правки. Входящая синхронизация отменена; повторите после сохранения.');
       if (useSyncStore.getState().userId !== userId || this.getActiveProvider() !== provider) throw new Error('Аккаунт или провайдер изменился во время синхронизации');
@@ -477,7 +487,7 @@ class SyncEngine {
         await tx.done;
         if (pushedNotebooks || pushedSections || pushedPages) {
           if (!await this.flushPendingChangesNow()) throw new Error(useSyncStore.getState().errorMessage || 'Очередь сохранена; отправка приостановлена');
-          cloudData = await provider.pullAll(userId);
+          cloudData = await this.pullForSync(provider, userId, localPages);
           validateCloudPull(cloudData);
         }
       } else {

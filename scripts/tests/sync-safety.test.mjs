@@ -519,3 +519,99 @@ test('restoring local data in another tab invalidates session checkpoints', asyn
   } finally { globalThis.localStorage = original; }
 });
 
+test('SHA-omitted content is retained while changed and emptied pages apply normally', async () => {
+  const { applyVersionedPull } = loadModule('src/services/sync/revisionPull.ts');
+  const { db, tables, cloud, binding, state } = conflictFixture();
+  const secondPage = { ...tables.pages[0], id: 'q', title: 'Second' };
+  const secondStroke = { ...tables.strokes[0], id: 'b', pageId: 'q' };
+  tables.pages.push(secondPage); tables.strokes.push(secondStroke);
+  cloud.pages.push(structuredClone(secondPage));
+  cloud.elements.push({ id: 'b', pageId: 'q', type: 'stroke', data: structuredClone(secondStroke), updatedAt: 1 });
+  cloud.completePageIds.push('q');
+  await applyVersionedPull(db, cloud, {}, binding, new Set(), () => true);
+  const revision = (await db.get('syncOutbox', state.key)).base;
+  cloud.omittedPages = [{ id: 'p', revision }];
+  cloud.elements = cloud.elements.filter(row => row.pageId === 'q');
+  cloud.elements[0].data.color = 'red';
+  cloud.pages[1].updatedAt = 2;
+  cloud.completePageIds = ['q'];
+  const result = await applyVersionedPull(db, cloud, {}, binding, new Set(), () => true);
+  assert.equal(result.conflicts.size, 0);
+  assert.equal(tables.strokes.find(row => row.id === 'a').color, 'black');
+  assert.equal(tables.strokes.find(row => row.id === 'b').color, 'red');
+  cloud.elements = [];
+  cloud.pages[1].updatedAt = 3;
+  const empty = await applyVersionedPull(db, cloud, {}, binding, new Set(), () => true);
+  assert.equal(empty.conflicts.size, 0);
+  assert.deepEqual(tables.strokes.map(row => row.id), ['a']);
+});
+
+test('unchanged pages skip SHA recalculation and stale omission proofs cannot replace local content', async () => {
+  const protocol = require(resolve('src/services/sync/protocol.mjs'));
+  let pageHashes = 0;
+  const { applyVersionedPull } = loadModule('src/services/sync/revisionPull.ts', { './protocol.mjs': { ...protocol,
+    versionHash: (...args) => { if (args[0] === 'pages') pageHashes++; return protocol.versionHash(...args); },
+    contentVersionHash: (...args) => { if (args[0] === 'pages') pageHashes++; return protocol.contentVersionHash(...args); },
+  } });
+  const { db, tables, cloud, binding, state } = conflictFixture();
+  await applyVersionedPull(db, cloud, {}, binding, new Set(), () => true);
+  const revision = (await db.get('syncOutbox', state.key)).base;
+  cloud.omittedPages = [{ id: 'p', revision }]; cloud.elements = []; cloud.completePageIds = [];
+  pageHashes = 0;
+  await applyVersionedPull(db, cloud, {}, binding, new Set(), () => true);
+  assert.equal(pageHashes, 0);
+  assert.equal(tables.strokes.length, 1);
+  tables.syncOutbox.find(row => row.key === state.key).localEpoch = 'backup restored';
+  await assert.rejects(applyVersionedPull(db, cloud, {}, binding, new Set(), () => true), /после запроса хешей/);
+  assert.equal(tables.strokes.length, 1);
+});
+
+test('queued edits on an omitted page still protect it from parent deletion', async () => {
+  const { applyVersionedPull } = loadModule('src/services/sync/revisionPull.ts');
+  const { db, tables, cloud, binding, state } = conflictFixture();
+  await applyVersionedPull(db, cloud, {}, binding, new Set(), () => true);
+  cloud.omittedPages = [{ id: 'p', revision: (await db.get('syncOutbox', state.key)).base }]; cloud.elements = []; cloud.completePageIds = [];
+  cloud.sections[0].deletedAt = 10;
+  tables.strokes[0].color = 'red';
+  tables.syncOutbox.push({ key: 'queued', provider: 'turso', userId: 'user', entity: 'pages', entityId: 'p', operationId: '1' });
+  const result = await applyVersionedPull(db, cloud, {}, binding, new Set(), () => true);
+  assert.ok(result.conflicts.has('p'));
+  assert.equal(tables.sections[0].deletedAt, undefined);
+  assert.equal(tables.strokes[0].color, 'red');
+});
+
+test('malformed partial snapshots are rejected before any local replacement', async () => {
+  const { validateCloudPull } = loadModule('src/services/sync/safePull.ts');
+  const { cloud } = conflictFixture();
+  cloud.omittedPages = [{ id: 'p', revision: 'a'.repeat(64) }];
+  assert.throws(() => validateCloudPull(cloud), /список неизменившихся/);
+  cloud.elements = [];
+  cloud.omittedPages[0].id = 'missing';
+  assert.throws(() => validateCloudPull(cloud), /список неизменившихся/);
+});
+
+test('delta requests trust only current-account clean revisions from the current local-data generation', async () => {
+  const { db, tables, state } = conflictFixture();
+  const make = (id, extra = {}) => ({ ...state, key: id, entityId: id, base: 'a'.repeat(64), conflict: false, localEpoch: '', ...extra });
+  tables.syncOutbox = [make('clean'), make('stale', { localEpoch: 'old backup' }), make('conflict', { conflict: true }), make('foreign', { userId: 'other' }), make('pending'), make('not-local')];
+  tables.syncOutbox.push({ key: 'queue', entity: 'pages', entityId: 'pending', provider: 'turso', userId: 'user' });
+  let known;
+  const f = engineFixture({ name: 'turso', pullChanges: async (_user, refs) => { known = refs; return empty(); } }, {}, db);
+  const pages = ['clean', 'stale', 'conflict', 'foreign', 'pending'].map(id => ({ id }));
+  await f.syncEngine.pullForSync({ name: 'turso', pullChanges: async (_user, refs) => { known = refs; return empty(); } }, 'user', pages);
+  assert.deepEqual(known, [{ id: 'clean', revision: 'a'.repeat(64) }]);
+  f.canvas.getUnsavedPageIds = () => ['clean'];
+  await f.syncEngine.pullForSync({ name: 'turso', pullChanges: async (_user, refs) => { known = refs; return empty(); } }, 'user', pages);
+  assert.deepEqual(known, []);
+});
+
+test('local-only edits invalidate SHA omission proofs without creating cloud upload intent', async () => {
+  const original = globalThis.localStorage, values = new Map([['onenote_sync_local_epoch', 'verified']]);
+  globalThis.localStorage = { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) };
+  try {
+    const { queueLocalChange } = loadModule('src/services/sync/outbox.ts');
+    await queueLocalChange({ objectStore() { throw Error('Local mode must not create cloud intent'); } }, 'pages', 'p', 'put', null);
+    assert.notEqual(values.get('onenote_sync_local_epoch'), 'verified');
+  } finally { globalThis.localStorage = original; }
+});
+

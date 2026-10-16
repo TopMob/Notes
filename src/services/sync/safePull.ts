@@ -15,7 +15,7 @@ export interface PullRevisions {
   unchanged: Set<string>;
   bases: { entity: OutboxEntity; id: string; hash: string | null; contentHash: string | null; canonical: string; conflict: boolean }[];
   assets: ImageAssetRecord[];
-  isSnapshotCurrent: (local: any[][]) => boolean;
+  isSnapshotCurrent: (local: any[][], outbox: any[]) => boolean;
 }
 
 const stores = ['notebooks', 'sections', 'pages', 'strokes', 'shapes', 'textBlocks'] as const;
@@ -43,11 +43,22 @@ export function validateCloudPull(cloud: CloudPullResult): void {
       throw new Error('Некорректная связь облачного элемента со страницей');
     }
   }
+  if (cloud.omittedPages !== undefined) {
+    if (!Array.isArray(cloud.omittedPages)) throw new Error('Некорректный список неизменившихся страниц');
+    const seen = new Set<string>();
+    const livePages = new Set(cloud.pages.filter(page => !page.deletedAt).map(page => page.id));
+    const contentPages = new Set(cloud.elements.map(element => element.pageId));
+    for (const row of cloud.omittedPages) {
+      if (!row || typeof row.id !== 'string' || !/^[a-f0-9]{64}$/.test(row.revision) || seen.has(row.id) || !livePages.has(row.id) || contentPages.has(row.id)) throw new Error('Повреждённый список неизменившихся страниц');
+      seen.add(row.id);
+    }
+  }
 }
 
 /** Incoming rows commit together. Absence never means deletion; existing content is retained on conflict. */
 export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPullResult, protectedPageIds: Set<string>, isCurrent: () => boolean = () => true, revisions?: PullRevisions) {
   validateCloudPull(cloud);
+  if (cloud.omittedPages?.length && !revisions) throw new Error('Частичный снимок требует проверки ревизий. Локальные заметки не изменены.');
   const tx = db.transaction([...stores, ...(revisions ? ['syncOutbox', 'assets'] as const : [])], 'readwrite');
   // Attach the rejection handler before a request can abort the transaction.
   const done = tx.done; void done.catch(() => {});
@@ -58,7 +69,7 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
     const local = await Promise.all(stores.map(name => tx.objectStore(name).getAll()));
     const checkCurrent = () => { if (!isCurrent()) throw new Error('Во время синхронизации появились новые правки или изменился аккаунт. Локальная загрузка отменена; повторите синхронизацию.'); };
     checkCurrent();
-    if (revisions && !revisions.isSnapshotCurrent(local)) throw new Error('Локальная база изменилась в другой вкладке. Повторите синхронизацию.');
+    if (revisions && !revisions.isSnapshotCurrent(local, await tx.objectStore('syncOutbox').getAll())) throw new Error('Локальная база изменилась в другой вкладке. Повторите синхронизацию.');
     const maps = Object.fromEntries(stores.map((name, i) => [name, new Map(local[i].map(row => [row.id, row]))])) as Record<typeof stores[number], Map<string, any>>;
     const merged = (name: 'notebooks' | 'sections' | 'pages', remote: any[]) => {
       const rows = new Map(maps[name]);
@@ -176,6 +187,7 @@ export async function applyCloudPull(db: IDBPDatabase<OneNoteDB>, cloud: CloudPu
       if (previous) { conflicts.add(el.pageId); continue; }
       await tx.objectStore(name).put(el.data);
       checkCurrent();
+      maps[name].set(el.id, el.data);
       pulled.elements++; changedPageIds.add(el.pageId);
     }
     const pageConflicts = new Set(conflicts);

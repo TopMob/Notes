@@ -29,6 +29,11 @@ export class TursoProvider implements ISyncProvider {
   async pullAll(_userId: string): Promise<CloudPullResult> {
     return this.readPull();
   }
+  async pullChanges(_userId: string, knownPages: { id: string; revision: string }[]): Promise<CloudPullResult> {
+    // Keep request metadata bounded even for unusually large accounts.
+    if (knownPages.length > 20000 || new TextEncoder().encode(JSON.stringify(knownPages)).length > 2 * 1024 * 1024) return this.readPull();
+    return this.readPull(undefined, knownPages);
+  }
   async getSyncToken(_userId: string): Promise<string> {
     const { token } = await (await this.request({ action: 'clock' })).json();
     if (typeof token !== 'string' || !/^[a-f0-9]{32}$/.test(token)) throw new Error('Некорректная отметка изменений облака');
@@ -43,8 +48,8 @@ export class TursoProvider implements ISyncProvider {
     }
     return result;
   }
-  private async readPull(entities?: { entity: 'notebooks' | 'sections' | 'pages'; id: string }[]): Promise<CloudPullResult> {
-    const response = await (await this.request({ action: 'pull', transport: 'chunks-v1', ...(entities ? { entities } : {}) })).json();
+  private async readPull(entities?: { entity: 'notebooks' | 'sections' | 'pages'; id: string }[], knownPages?: { id: string; revision: string }[]): Promise<CloudPullResult> {
+    const response = await (await this.request({ action: 'pull', transport: 'chunks-v1', ...(entities ? { entities } : {}), ...(knownPages ? { knownPages } : {}) })).json();
     if (response.transfer) {
       const first = response.transfer;
       if (typeof first.id !== 'string' || !/^[a-f0-9]{64}$/.test(first.hash || '') || !Number.isInteger(first.total) || first.total < 1 || first.total > 256) throw new Error('Некорректный снимок облака');

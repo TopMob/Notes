@@ -10,6 +10,7 @@ import type { RevisionState } from './revisionState';
 import type { OutboxEntity } from './outbox';
 import { assetManager } from '../assets/assetManager';
 import type { PageElementsBundle } from './compression';
+import { localSyncEpoch } from './localEpoch';
 
 function pageBundles() {
   const pages = new Map<string, PageElementsBundle>();
@@ -26,17 +27,28 @@ export async function applyVersionedPull(db: IDBPDatabase<OneNoteDB>, cloud: Clo
   const stateRows = await tx.objectStore('syncOutbox').getAll(); await tx.done;
   const states = new Map(stateRows.filter((r): r is RevisionState => r.provider === 'state').map(r => [r.key, r]));
   const before = stable(local);
+  const beforeOutbox = stable(stateRows);
+  const epoch = localSyncEpoch();
+  const omitted = new Map((cloud.omittedPages || []).map(row => [row.id, row.revision]));
   const localPages = pageBundles(), remotePages = pageBundles();
   for (const [index, table] of ['strokes', 'shapes', 'textBlocks'].entries()) for (const row of local[index + 3]) localPages.add('pageId' in row ? row.pageId : '', table as keyof PageElementsBundle, row);
   const elementTables = { stroke: 'strokes', shape: 'shapes', textBlock: 'textBlocks' } as const;
   for (const row of cloud.elements) if (!row.deletedAt) remotePages.add(row.pageId, elementTables[row.type], row.data);
   const queued = new Set(stateRows.filter(row => row.provider === binding.provider && row.userId === binding.userId).map(row => `${row.entity}:${row.entityId}`));
   const empty: PageElementsBundle = { strokes: [], shapes: [], textBlocks: [] };
-  const options: PullRevisions = { binding, accepted: new Set(), protected: new Set(), unchanged: new Set(), bases: [], assets: [], isSnapshotCurrent: rows => stable(rows) === before };
+  const options: PullRevisions = { binding, accepted: new Set(), protected: new Set(), unchanged: new Set(), bases: [], assets: [], isSnapshotCurrent: (rows, outbox) => localSyncEpoch() === epoch && stable(rows) === before && stable(outbox) === beforeOutbox };
   for (const [index, entity] of ['notebooks', 'sections', 'pages'].entries()) {
     const map = new Map(local[index].map(row => [row.id, row]));
     for (const remote of cloud[entity as OutboxEntity]) {
       const row = map.get(remote.id);
+      const state = states.get(revisionKey(binding, entity as OutboxEntity, remote.id));
+      const protectedLocal = queued.has(`${entity}:${remote.id}`) || entity === 'pages' && protectedPages.has(remote.id);
+      if (entity === 'pages' && omitted.has(remote.id)) {
+        if (!row || state?.conflict || state?.base !== omitted.get(remote.id) || state?.localEpoch !== localSyncEpoch()) throw new Error('Локальная версия страницы изменилась после запроса хешей. Повторите синхронизацию.');
+        if (protectedLocal) { options.protected.add(`pages:${remote.id}`); protectedPages.add(remote.id); }
+        else options.unchanged.add(`pages:${remote.id}`);
+        continue;
+      }
       const localElements = entity === 'pages' ? localPages.pages.get(remote.id) || empty : undefined;
       const remoteElements = entity === 'pages' ? remotePages.pages.get(remote.id) || empty : undefined;
       const actual = await versionHash(entity, row, localElements);
@@ -44,8 +56,6 @@ export async function applyVersionedPull(db: IDBPDatabase<OneNoteDB>, cloud: Clo
       const actualContent = await contentVersionHash(entity, row, localElements);
       const incomingContent = await contentVersionHash(entity, remote, remoteElements);
       const sameContent = actualContent === incomingContent;
-      const state = states.get(revisionKey(binding, entity as OutboxEntity, remote.id));
-      const protectedLocal = queued.has(`${entity}:${remote.id}`) || entity === 'pages' && protectedPages.has(remote.id);
       const bothDeleted = (!row || !!('deletedAt' in row && row.deletedAt)) && !!remote.deletedAt;
       const localChanged = state?.contentBase !== undefined ? state.contentBase !== actualContent : state?.base !== actual;
       let conflict = !bothDeleted && !!row && !sameContent && (protectedLocal || state?.conflict || localChanged);
