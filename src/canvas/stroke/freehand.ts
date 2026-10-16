@@ -28,7 +28,8 @@ function getGeometry(stroke: Stroke) {
     for (let i = 1; i < outline.length; i++) path.lineTo(outline[i][0], outline[i][1]);
     path.closePath();
   }
-  const geometry = { width: stroke.baseWidth, length: stroke.points.length, outline, path };
+  // The native path already owns its coordinates; don't also retain a JS copy.
+  const geometry = { width: stroke.baseWidth, length: stroke.points.length, outline: path ? [] : outline, path };
   geometryCache.set(stroke.points, geometry);
   return geometry;
 }
@@ -74,7 +75,7 @@ export function drawStrokeToCanvas(ctx: CanvasRenderingContext2D, stroke: Stroke
   try {
     const { outline: outlinePoints, path } = getGeometry(stroke);
 
-    if (outlinePoints && outlinePoints.length >= 3) {
+    if (path || outlinePoints.length >= 3) {
       if (path) {
         ctx.fill(path);
         ctx.restore();
