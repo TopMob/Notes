@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState, useRef } from 'react';
 import {
   Undo2,
@@ -25,26 +26,30 @@ export const RibbonHome: React.FC = () => {
   const {
     addTextBlock,
     updateTextBlockWithHistory,
-    camera,
-    currentPageId,
     canUndo,
     canRedo,
     undo,
     redo,
-    textBlocks,
-    selectedTextBlockIds,
-  } = useCanvasStore();
+  } = useCanvasStore(useShallow(state => ({
+    addTextBlock: state.addTextBlock,
+    updateTextBlockWithHistory: state.updateTextBlockWithHistory,
+    canUndo: state.canUndo,
+    canRedo: state.canRedo,
+    undo: state.undo,
+    redo: state.redo,
+  })));
 
   const [isSymbolOpen, setIsSymbolOpen] = useState(false);
   const symbolBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const handleCreateTextBlock = () => {
+    const currentPageId = useCanvasStore.getState().currentPageId;
     if (!currentPageId) return;
     addTextBlock({
       id: `tb-${Date.now()}`,
       pageId: currentPageId,
-      x: camera.x - 100,
-      y: camera.y - 50,
+      x: useCanvasStore.getState().camera.x - 100,
+      y: useCanvasStore.getState().camera.y - 50,
       width: 480,
       contentHTML: '<p>Введите ваш текст здесь...</p>',
       zIndex: 10,
@@ -69,8 +74,8 @@ export const RibbonHome: React.FC = () => {
       return;
     }
 
-    const activeBlockId = selectedTextBlockIds[0];
-    const activeBlock = textBlocks.find((b) => b.id === activeBlockId);
+    const activeBlockId = useCanvasStore.getState().selectedTextBlockIds[0];
+    const activeBlock = useCanvasStore.getState().textBlocks.find((b) => b.id === activeBlockId);
     if (activeBlock) {
       const parser = new DOMParser();
       const doc = parser.parseFromString(`<div>${activeBlock.contentHTML}</div>`, 'text/html');
@@ -93,6 +98,7 @@ export const RibbonHome: React.FC = () => {
   };
 
   const insertSymbol = (char: string) => {
+    const currentPageId = useCanvasStore.getState().currentPageId;
     if (!currentPageId) return;
 
     const sel = window.getSelection();
@@ -118,8 +124,8 @@ export const RibbonHome: React.FC = () => {
 
     if (insertedInCursor) return;
 
-    const activeBlockId = selectedTextBlockIds[0];
-    const activeBlock = textBlocks.find((b) => b.id === activeBlockId);
+    const activeBlockId = useCanvasStore.getState().selectedTextBlockIds[0];
+    const activeBlock = useCanvasStore.getState().textBlocks.find((b) => b.id === activeBlockId);
 
     if (activeBlock) {
       updateTextBlockWithHistory(
@@ -135,11 +141,11 @@ export const RibbonHome: React.FC = () => {
       addTextBlock({
         id: newId,
         pageId: currentPageId,
-        x: Math.round(camera.x - 100),
-        y: Math.round(camera.y - 50),
+        x: Math.round(useCanvasStore.getState().camera.x - 100),
+        y: Math.round(useCanvasStore.getState().camera.y - 50),
         width: 360,
         contentHTML: `<p>${char}</p>`,
-        zIndex: 10 + textBlocks.length,
+        zIndex: 10 + useCanvasStore.getState().textBlocks.length,
       });
     }
   };

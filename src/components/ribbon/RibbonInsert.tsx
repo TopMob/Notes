@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState, useRef } from 'react';
 import {
   Table,
@@ -16,11 +17,11 @@ export const RibbonInsert: React.FC = () => {
     addTextBlock,
     updateTextBlockWithHistory,
     setSelection,
-    camera,
-    currentPageId,
-    textBlocks,
-    selectedTextBlockIds,
-  } = useCanvasStore();
+  } = useCanvasStore(useShallow(state => ({
+    addTextBlock: state.addTextBlock,
+    updateTextBlockWithHistory: state.updateTextBlockWithHistory,
+    setSelection: state.setSelection,
+  })));
 
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [tableHoverGrid, setTableHoverGrid] = useState<{ r: number; c: number }>({ r: 0, c: 0 });
@@ -44,6 +45,7 @@ export const RibbonInsert: React.FC = () => {
   const closeDropdowns = () => setActiveDropdown(null);
 
   const insertContent = (htmlSnippet: string, defaultWidth = 460) => {
+    const currentPageId = useCanvasStore.getState().currentPageId;
     if (!currentPageId) return;
     closeDropdowns();
 
@@ -57,8 +59,8 @@ export const RibbonInsert: React.FC = () => {
       }
     }
 
-    const activeBlockId = selectedTextBlockIds[0];
-    const activeBlock = textBlocks.find((b) => b.id === activeBlockId);
+    const activeBlockId = useCanvasStore.getState().selectedTextBlockIds[0];
+    const activeBlock = useCanvasStore.getState().textBlocks.find((b) => b.id === activeBlockId);
 
     if (activeBlock) {
       updateTextBlockWithHistory(
@@ -74,17 +76,18 @@ export const RibbonInsert: React.FC = () => {
       addTextBlock({
         id: newId,
         pageId: currentPageId,
-        x: Math.round(camera.x - defaultWidth / 2),
-        y: Math.round(camera.y - 120),
+        x: Math.round(useCanvasStore.getState().camera.x - defaultWidth / 2),
+        y: Math.round(useCanvasStore.getState().camera.y - 120),
         width: defaultWidth,
         contentHTML: htmlSnippet,
-        zIndex: 10 + textBlocks.length,
+        zIndex: 10 + useCanvasStore.getState().textBlocks.length,
       });
       setSelection([], [], [newId]);
     }
   };
 
   const insertSymbol = (char: string) => {
+    const currentPageId = useCanvasStore.getState().currentPageId;
     if (!currentPageId) return;
 
     // Пытаемся вставить прямо в текущую позицию курсора
@@ -112,8 +115,8 @@ export const RibbonInsert: React.FC = () => {
     if (insertedInCursor) return;
 
     // Если фокуса нет, но выделен блок - добавляем в него
-    const activeBlockId = selectedTextBlockIds[0];
-    const activeBlock = textBlocks.find((b) => b.id === activeBlockId);
+    const activeBlockId = useCanvasStore.getState().selectedTextBlockIds[0];
+    const activeBlock = useCanvasStore.getState().textBlocks.find((b) => b.id === activeBlockId);
 
     if (activeBlock) {
       updateTextBlockWithHistory(
@@ -130,11 +133,11 @@ export const RibbonInsert: React.FC = () => {
       addTextBlock({
         id: newId,
         pageId: currentPageId,
-        x: Math.round(-camera.x + 100),
-        y: Math.round(-camera.y + 120),
+        x: Math.round(-useCanvasStore.getState().camera.x + 100),
+        y: Math.round(-useCanvasStore.getState().camera.y + 120),
         width: 360,
         contentHTML: `<p>${char}</p>`,
-        zIndex: 10 + textBlocks.length,
+        zIndex: 10 + useCanvasStore.getState().textBlocks.length,
       });
     }
   };
@@ -176,6 +179,7 @@ export const RibbonInsert: React.FC = () => {
   // Вставка изображения через диалог выбора файла
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    const currentPageId = useCanvasStore.getState().currentPageId;
     if (!file || !currentPageId) return;
 
     // Мгновенный 0ms Object URL и локальное сохранение в IndexedDB

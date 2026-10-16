@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React from 'react';
 import { Camera, ViewportSize } from '../../types/canvas';
 import { useCanvasStore } from '../../store/useCanvasStore';
@@ -17,7 +18,12 @@ export const TextOverlay: React.FC<TextOverlayProps> = ({
     selectedTextBlockIds,
     setSelection,
     clearSelection,
-  } = useCanvasStore();
+  } = useCanvasStore(useShallow(state => ({
+    textBlocks: state.textBlocks,
+    selectedTextBlockIds: state.selectedTextBlockIds,
+    setSelection: state.setSelection,
+    clearSelection: state.clearSelection,
+  })));
 
   return (
     <div

@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { registerCanvasPageLeave, useCanvasStore } from '../../store/useCanvasStore';
 import { Viewport } from '../../canvas/engine/Viewport';
@@ -57,7 +58,42 @@ export const InfiniteCanvas: React.FC = () => {
     moveSelectedItems,
     commitMoveItems,
     addTextBlock,
-  } = useCanvasStore();
+  } = useCanvasStore(useShallow(state => ({
+    activeTool: state.activeTool,
+    penColor: state.penColor,
+    penWidth: state.penWidth,
+    penCursorStyle: state.penCursorStyle,
+    rightClickAction: state.rightClickAction,
+    eraserSize: state.eraserSize,
+    highlighterColor: state.highlighterColor,
+    highlighterWidth: state.highlighterWidth,
+    shapeType: state.shapeType,
+    shapeColor: state.shapeColor,
+    shapeWidth: state.shapeWidth,
+    camera: state.camera,
+    setCamera: state.setCamera,
+    drawWithTouch: state.drawWithTouch,
+    background: state.background,
+    currentPageId: state.currentPageId,
+    strokes: state.strokes,
+    shapes: state.shapes,
+    textBlocks: state.textBlocks,
+    textBlockHeights: state.textBlockHeights,
+    addStroke: state.addStroke,
+    deleteStrokesSilent: state.deleteStrokesSilent,
+    replaceStrokesSilent: state.replaceStrokesSilent,
+    addShape: state.addShape,
+    deleteShapesSilent: state.deleteShapesSilent,
+    spatialIndex: state.spatialIndex,
+    selectedStrokeIds: state.selectedStrokeIds,
+    selectedShapeIds: state.selectedShapeIds,
+    selectedTextBlockIds: state.selectedTextBlockIds,
+    setSelection: state.setSelection,
+    clearSelection: state.clearSelection,
+    moveSelectedItems: state.moveSelectedItems,
+    commitMoveItems: state.commitMoveItems,
+    addTextBlock: state.addTextBlock,
+  })));
 
   const { isSidebarOpen, isZenMode } = useUiStore();
 

@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState, useEffect } from 'react';
 import { Search, X, ArrowRight } from 'lucide-react';
 import { useUiStore } from '../../store/useUiStore';
@@ -17,7 +18,9 @@ interface SearchResult {
 export const SearchModal: React.FC = () => {
   const { isSearchOpen, setSearchOpen } = useUiStore();
   const { navigateToPage } = useNotebookStore();
-  const { setCamera } = useCanvasStore();
+  const { setCamera } = useCanvasStore(useShallow(state => ({
+    setCamera: state.setCamera,
+  })));
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);

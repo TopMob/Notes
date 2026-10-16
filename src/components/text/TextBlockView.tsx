@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import katex from 'katex';
 import { GripHorizontal, X } from 'lucide-react';
@@ -41,7 +42,12 @@ export const TextBlockView: React.FC<TextBlockViewProps> = ({
   isActive,
   onSelect,
 }) => {
-  const { activeTool, updateTextBlock, removeTextBlock, setTextBlockHeight } = useCanvasStore();
+  const { activeTool, updateTextBlock, removeTextBlock, setTextBlockHeight } = useCanvasStore(useShallow(state => ({
+    activeTool: state.activeTool,
+    updateTextBlock: state.updateTextBlock,
+    removeTextBlock: state.removeTextBlock,
+    setTextBlockHeight: state.setTextBlockHeight,
+  })));
   const screenPos = Viewport.worldToScreen({ x: block.x, y: block.y }, camera, viewportSize);
 
   const containerRef = useRef<HTMLDivElement | null>(null);

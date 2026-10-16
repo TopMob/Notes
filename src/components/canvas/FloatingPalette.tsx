@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState } from 'react';
 import {
   PenTool,
@@ -24,7 +25,17 @@ export const FloatingPalette: React.FC = () => {
     canRedo,
     undo,
     redo,
-  } = useCanvasStore();
+  } = useCanvasStore(useShallow(state => ({
+    activeTool: state.activeTool,
+    setActiveTool: state.setActiveTool,
+    penColor: state.penColor,
+    setPenColor: state.setPenColor,
+    quickColors: state.quickColors,
+    canUndo: state.canUndo,
+    canRedo: state.canRedo,
+    undo: state.undo,
+    redo: state.redo,
+  })));
   const { isFloatingPaletteOpen, toggleFloatingPalette } = useUiStore();
 
   const [position, setPosition] = useState({ x: 340, y: 140 });

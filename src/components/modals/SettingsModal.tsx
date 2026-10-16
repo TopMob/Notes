@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState, useEffect } from 'react';
 import {
   X,
@@ -44,7 +45,14 @@ export const SettingsModal: React.FC = () => {
     setRightClickAction,
     eraserSize,
     setEraserSize,
-  } = useCanvasStore();
+  } = useCanvasStore(useShallow(state => ({
+    penCursorStyle: state.penCursorStyle,
+    setPenCursorStyle: state.setPenCursorStyle,
+    rightClickAction: state.rightClickAction,
+    setRightClickAction: state.setRightClickAction,
+    eraserSize: state.eraserSize,
+    setEraserSize: state.setEraserSize,
+  })));
 
   const {
     shortcuts,

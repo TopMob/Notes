@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Undo2,
@@ -49,7 +50,35 @@ export const RibbonDraw: React.FC = () => {
     redo,
     drawWithTouch,
     toggleDrawWithTouch,
-  } = useCanvasStore();
+  } = useCanvasStore(useShallow(state => ({
+    activeTool: state.activeTool,
+    setActiveTool: state.setActiveTool,
+    penColor: state.penColor,
+    setPenColor: state.setPenColor,
+    penWidth: state.penWidth,
+    setPenWidth: state.setPenWidth,
+    eraserSize: state.eraserSize,
+    setEraserSize: state.setEraserSize,
+    quickColors: state.quickColors,
+    updateQuickColor: state.updateQuickColor,
+    shapeType: state.shapeType,
+    setShapeType: state.setShapeType,
+    shapeColor: state.shapeColor,
+    setShapeColor: state.setShapeColor,
+    shapeWidth: state.shapeWidth,
+    setShapeWidth: state.setShapeWidth,
+    updateSelectedShapesColor: state.updateSelectedShapesColor,
+    deleteSelectedItems: state.deleteSelectedItems,
+    selectedStrokeIds: state.selectedStrokeIds,
+    selectedShapeIds: state.selectedShapeIds,
+    selectedTextBlockIds: state.selectedTextBlockIds,
+    canUndo: state.canUndo,
+    canRedo: state.canRedo,
+    undo: state.undo,
+    redo: state.redo,
+    drawWithTouch: state.drawWithTouch,
+    toggleDrawWithTouch: state.toggleDrawWithTouch,
+  })));
 
   const [isEraserMenuOpen, setIsEraserMenuOpen] = useState(false);
   const [isWidthMenuOpen, setIsWidthMenuOpen] = useState(false);

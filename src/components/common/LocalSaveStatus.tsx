@@ -1,8 +1,13 @@
+import { useShallow } from 'zustand/react/shallow';
 import { AlertCircle, CheckCircle2, RefreshCw, Save } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
 
 export function LocalSaveStatus() {
-  const { saveStatus, saveError, flushAllSaves } = useCanvasStore();
+  const { saveStatus, saveError, flushAllSaves } = useCanvasStore(useShallow(state => ({
+    saveStatus: state.saveStatus,
+    saveError: state.saveError,
+    flushAllSaves: state.flushAllSaves,
+  })));
   const label = saveStatus === 'error' ? 'Повторить сохранение' : saveStatus === 'saving' ? 'Сохранение…' : saveStatus === 'unsaved' ? 'Есть правки' : 'Сохранено на устройстве';
   const Icon = saveStatus === 'error' ? AlertCircle : saveStatus === 'saving' ? RefreshCw : saveStatus === 'unsaved' ? Save : CheckCircle2;
   return (

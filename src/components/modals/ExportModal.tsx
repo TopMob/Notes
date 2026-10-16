@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React from 'react';
 import { X, Image, FileJson, FileText, Download, Upload } from 'lucide-react';
 import { useCanvasStore } from '../../store/useCanvasStore';
@@ -8,7 +9,13 @@ import { drawShapeToCanvas } from '../../canvas/stroke/shapes';
 
 export const ExportModal: React.FC = () => {
   const { isExportOpen, setExportOpen } = useUiStore();
-  const { strokes, shapes, textBlocks, background, textBlockHeights } = useCanvasStore();
+  const { strokes, shapes, textBlocks, background, textBlockHeights } = useCanvasStore(useShallow(state => ({
+    strokes: state.strokes,
+    shapes: state.shapes,
+    textBlocks: state.textBlocks,
+    background: state.background,
+    textBlockHeights: state.textBlockHeights,
+  })));
   const { activePage } = useNotebookStore();
 
   if (!isExportOpen) return null;

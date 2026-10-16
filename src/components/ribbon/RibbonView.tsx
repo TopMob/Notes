@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React from 'react';
 import {
   ZoomIn,
@@ -15,7 +16,12 @@ import { CanvasBackground } from '../../types/canvas';
 import { Viewport } from '../../canvas/engine/Viewport';
 
 export const RibbonView: React.FC = () => {
-  const { camera, setCamera, background, setBackground } = useCanvasStore();
+  const { camera, setCamera, background, setBackground } = useCanvasStore(useShallow(state => ({
+    camera: state.camera,
+    setCamera: state.setCamera,
+    background: state.background,
+    setBackground: state.setBackground,
+  })));
   const {
     isFloatingPaletteOpen,
     toggleFloatingPalette,
