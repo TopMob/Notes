@@ -1,7 +1,33 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getStroke } from 'perfect-freehand';
+import { crc32 } from 'node:zlib';
 import { loadTs } from './helpers/load-ts.mjs';
+
+test('PNG tiling preserves all pixels at 2x and ZIP preserves every original byte and CRC', async () => {
+  const {planPngTiles,zipFiles}=loadTs('src/utils/pngExport.ts');
+  for (const [width,height] of [[1000,1000],[6000,7000],[100,30000]]) {
+    const tiles=planPngTiles(width,height);
+    assert.equal(tiles.reduce((n,t)=>n+t.width*t.height,0),width*height);
+    for(const tile of tiles) {
+      assert.ok(tile.width*tile.height*4<=16_777_216);
+      assert.ok(tile.x+tile.width<=width && tile.y+tile.height<=height);
+    }
+  }
+  const files=[{name:'page-001.png',blob:new Blob(['original png bytes'])},{name:'layout.json',blob:new Blob(['{"scale":2}'])}];
+  const zip=new Uint8Array(await (await zipFiles(files)).arrayBuffer());
+  const view=new DataView(zip.buffer);let offset=0;
+  for(const file of files) {
+    assert.equal(view.getUint32(offset,true),0x04034b50);
+    const nameLength=view.getUint16(offset+26,true), size=view.getUint32(offset+18,true);
+    const data=zip.slice(offset+30+nameLength,offset+30+nameLength+size);
+    assert.deepEqual(data,new Uint8Array(await file.blob.arrayBuffer()));
+    assert.equal(view.getUint32(offset+14,true),crc32(data));
+    offset+=30+nameLength+size;
+  }
+  assert.equal(view.getUint32(offset,true),0x02014b50);
+  assert.equal(view.getUint32(zip.length-22,true),0x06054b50);
+});
 
 test('unchanged formulas reuse HTML without replacing their DOM; edits invalidate the cache', () => {
   let calls = 0, writes = 0, html = '';
