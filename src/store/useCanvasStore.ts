@@ -1064,30 +1064,48 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         const after = current.filter(item => old.has(item.id) && old.get(item.id) !== item);
         return { before: after.map(item => old.get(item.id)!), after };
       };
-      const strokes = changed(prevStrokes, state.strokes);
-      const shapes = changed(prevShapes, state.shapes);
-      const text = changed(prevTextBlocks, state.textBlocks);
+      const strokeChanges = changed(prevStrokes, state.strokes);
+      const shapeChanges = changed(prevShapes, state.shapes);
+      const textChanges = changed(prevTextBlocks, state.textBlocks);
+      const strokePosition = ({ id, points, bounds }: Stroke) => ({ id, points, bounds });
+      const shapePosition = ({ id, anchor, end, bounds }: ShapeObject) => ({ id, anchor, end, bounds });
+      const textPosition = ({ id, x, y }: TextBlock) => ({ id, x, y });
+      const strokes = { before: strokeChanges.before.map(strokePosition), after: strokeChanges.after.map(strokePosition) };
+      const shapes = { before: shapeChanges.before.map(shapePosition), after: shapeChanges.after.map(shapePosition) };
+      const text = { before: textChanges.before.map(textPosition), after: textChanges.after.map(textPosition) };
       if (!strokes.after.length && !shapes.after.length && !text.after.length) return;
-      const apply = (nextStrokes: Stroke[], nextShapes: ShapeObject[], nextText: TextBlock[]) => {
+      const apply = (
+        nextStrokes: Pick<Stroke, 'id' | 'points' | 'bounds'>[],
+        nextShapes: Pick<ShapeObject, 'id' | 'anchor' | 'end' | 'bounds'>[],
+        nextText: Pick<TextBlock, 'id' | 'x' | 'y'>[],
+      ) => {
         if (get().currentPageId !== pageId) return;
-        const replace = <T extends { id: string }>(current: T[], updates: T[]) => {
+        const replace = <T extends { id: string }>(current: T[], updates: (Partial<T> & { id: string })[], index?: (item: T) => void) => {
           if (!updates.length) return current;
           const map = new Map(updates.map(item => [item.id, item]));
-          return current.map(item => map.get(item.id) || item);
+          return current.map(item => {
+            const position = map.get(item.id);
+            if (!position) return item;
+            const merged = { ...item, ...position };
+            index?.(merged);
+            return merged;
+          });
         };
         set(current => {
-          for (const item of [...nextStrokes, ...nextShapes]) spatialIndex.insert(item);
           return {
-            strokes: replace(current.strokes, nextStrokes),
-            shapes: replace(current.shapes, nextShapes),
+            strokes: replace(current.strokes, nextStrokes, item => spatialIndex.insert(item)),
+            shapes: replace(current.shapes, nextShapes, item => spatialIndex.insert(item)),
             textBlocks: replace(current.textBlocks, nextText),
           };
         });
         if (pageId) {
           const d = getOrCreateDirty(pageId);
-          for (const item of nextStrokes) { d.strokesPut.set(item.id, item); d.strokesDelete.delete(item.id); }
-          for (const item of nextShapes) { d.shapesPut.set(item.id, item); d.shapesDelete.delete(item.id); }
-          for (const item of nextText) { d.textBlocksPut.set(item.id, item); d.textBlocksDelete.delete(item.id); }
+          const strokeIds = new Set(nextStrokes.map(item => item.id));
+          const shapeIds = new Set(nextShapes.map(item => item.id));
+          const textIds = new Set(nextText.map(item => item.id));
+          for (const item of get().strokes) if (strokeIds.has(item.id)) { d.strokesPut.set(item.id, item); d.strokesDelete.delete(item.id); }
+          for (const item of get().shapes) if (shapeIds.has(item.id)) { d.shapesPut.set(item.id, item); d.shapesDelete.delete(item.id); }
+          for (const item of get().textBlocks) if (textIds.has(item.id)) { d.textBlocksPut.set(item.id, item); d.textBlocksDelete.delete(item.id); }
           scheduleSave(pageId);
         }
       };

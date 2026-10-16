@@ -58,6 +58,22 @@ test('move history changes only moved records, retains other edits and persists 
   assert.equal(store.getState().textBlocks[0].contentHTML,'keep newer text');
 });
 
+test('undoing a text move preserves text typed into that same block after moving', async () => {
+  const writes=[]; const store=canvas(async (_,diff)=>writes.push(diff));
+  const block={id:'text',pageId:'p',x:1,y:2,width:400,contentHTML:'original',zIndex:10};
+  store.setState({textBlocks:[block],selectedTextBlockIds:['text']});
+  const before=store.getState();
+  store.getState().moveSelectedItems(10,20);
+  store.getState().commitMoveItems(before.strokes,before.shapes,before.textBlocks);
+  store.getState().updateTextBlock('text',{contentHTML:'invaluable new information',width:500});
+  store.getState().undo(); await store.getState().flushAllSaves();
+  assert.deepEqual(store.getState().textBlocks[0],{...block,contentHTML:'invaluable new information',width:500});
+  assert.equal(writes.at(-1).textBlocks.put[0].contentHTML,'invaluable new information');
+  store.getState().redo(); await store.getState().flushAllSaves();
+  assert.equal(store.getState().textBlocks[0].x,11);
+  assert.equal(store.getState().textBlocks[0].contentHTML,'invaluable new information');
+});
+
 test('failed local save retains edits, reports error and retries actual diff', async () => {
   const writes = []; let fail = true;
   const store = canvas(async (_, diff) => { writes.push(diff); if (fail) throw Error('QuotaExceededError'); });
