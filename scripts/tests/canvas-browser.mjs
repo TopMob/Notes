@@ -38,6 +38,8 @@ try {
   await context.route('**/src/store/useNotebookStore.ts*',route=>route.fulfill({contentType:'application/javascript',body:`export const useNotebookStore=()=>({activePage:{title:'Fixture'}});`}));
   const page=await context.newPage(); const errors=[];
   page.setDefaultTimeout(15000);
+  const cpuRate=Number(process.env.NOTES_CPU_THROTTLE || 1);
+  if(cpuRate>1) await (await context.newCDPSession(page)).send('Emulation.setCPUThrottlingRate',{rate:cpuRate});
   page.on('pageerror',e=>errors.push(e.message));
   await page.goto(server.resolvedUrls.local[0]+'__canvas-test');
   const block=page.locator('.text-block-container'); const content=page.locator('.text-block-content');
@@ -51,6 +53,19 @@ try {
   assert.match(await content.textContent(),/Keep this note typed/);
   await page.keyboard.type(' more'); await content.blur();
   assert.match(await page.evaluate(()=>window.store.getState().textBlocks[0].contentHTML),/typed more/);
+  // Drag and resize coordinates stay in world units under the shared transform.
+  const handle=await page.locator('.text-block-handle').boundingBox();
+  await page.mouse.move(handle.x+20,handle.y+5);await page.mouse.down();
+  await page.mouse.move(handle.x+80,handle.y+35,{steps:8});await page.mouse.up();
+  assert.equal(await page.evaluate(()=>window.store.getState().textBlocks[0].x),140);
+  await page.evaluate(()=>window.store.getState().setCamera({x:300,y:20,zoom:1.5}));
+  await page.waitForFunction(()=>document.querySelector('.dom-text-overlay > div').style.transform.includes('translate(150px'));
+  const resize=await page.locator('.text-block-resize-handle').boundingBox();
+  await page.mouse.move(resize.x+resize.width/2,resize.y+resize.height/2);await page.mouse.down();
+  await page.mouse.move(resize.x+resize.width/2+90,resize.y+resize.height/2,{steps:8});await page.mouse.up();
+  assert.equal(await page.evaluate(()=>window.store.getState().textBlocks[0].width),460);
+  await page.evaluate(()=>window.store.getState().setCamera({x:50,y:20,zoom:1.5}));
+  await page.waitForFunction(()=>document.querySelector('.dom-text-overlay > div').style.transform.includes('translate(525px'));
   // Drawing and its history use real pointer handlers and real persistence diffs.
   await page.evaluate(()=>window.store.getState().setActiveTool('pen'));
   await page.mouse.move(100,120); await page.mouse.down(); await page.mouse.move(300,220,{steps:30}); await page.mouse.up();
@@ -91,6 +106,19 @@ try {
   }
   await page.evaluate(()=>window.stack.undo()); await matchFullDraw();
   await page.evaluate(()=>window.stack.redo()); await matchFullDraw();
+  // Real group movement, erasing and their undo must restore exact stored points.
+  const originalInk=await page.evaluate(()=>structuredClone(window.store.getState().strokes));
+  await page.evaluate(()=>{const s=window.store.getState();s.setActiveTool('cursor');s.setSelection([s.strokes[0].id],[],[]);});
+  await page.mouse.move(100,120);await page.mouse.down();await page.mouse.move(160,150,{steps:8});await page.mouse.up();
+  assert.equal(await page.evaluate(()=>window.store.getState().strokes[0].points[0].x),originalInk[0].points[0].x+40);
+  await matchFullDraw();await page.evaluate(()=>window.stack.undo());await matchFullDraw();
+  assert.deepEqual(await page.evaluate(()=>window.store.getState().strokes),originalInk);
+  await page.evaluate(()=>window.store.getState().setActiveTool('stroke-eraser'));
+  await page.mouse.move(100,120);await page.mouse.down();await page.mouse.move(150,145,{steps:5});await page.mouse.up();
+  assert.ok(await page.evaluate(()=>window.store.getState().strokes.length)<originalInk.length);
+  await page.evaluate(()=>window.stack.undo());await matchFullDraw();
+  assert.deepEqual(await page.evaluate(()=>window.store.getState().strokes),originalInk);
+  await page.evaluate(()=>window.store.getState().setActiveTool('pen'));
   // Leaving during a held stroke commits it on the original page before loading.
   const committedIds=await page.evaluate(()=>window.store.getState().strokes.map(s=>s.id));
   await page.mouse.move(100,300); await page.mouse.down(); await page.mouse.move(300,350,{steps:12});
@@ -131,5 +159,5 @@ try {
   const bytes=await readFile(await zip.path()); assert.equal(bytes.readUInt32LE(0),0x04034b50);
   assert.ok(bytes.includes(Buffer.from('layout.json')));
   assert.deepEqual(errors,[]);
-  console.log('Canvas browser: transformed text/focus/caret, full pen input, undo/redo and page leave passed.');
+  console.log(`Canvas browser (CPU ${cpuRate}x): text/focus/caret, drag/resize, ink/eraser/history, pixel equality, page leave, PNG pixels and tiled ZIP passed.`);
 } finally { await browser?.close(); await server.close(); }
