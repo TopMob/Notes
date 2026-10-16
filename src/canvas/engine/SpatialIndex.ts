@@ -31,6 +31,8 @@ export class SpatialIndex {
   private cellSize: number;
   private grid = new Map<string, Set<SpatialItem>>();
   private items = new Map<string, SpatialItem>();
+  private memberships = new Map<string, string[]>();
+  private oversized = new Set<string>();
 
   constructor(cellSize = DEFAULT_CELL_SIZE) {
     this.cellSize = cellSize;
@@ -41,15 +43,27 @@ export class SpatialIndex {
   }
 
   insert(item: SpatialItem): void {
+    if (this.items.get(item.id) === item) return;
+    this.remove(item.id);
     this.items.set(item.id, item);
     const minCx = Math.floor(item.bounds.minX / this.cellSize);
     const maxCx = Math.floor(item.bounds.maxX / this.cellSize);
     const minCy = Math.floor(item.bounds.minY / this.cellSize);
     const maxCy = Math.floor(item.bounds.maxY / this.cellSize);
 
+    // A diagonal or imported object can span millions of cells. Keep it in a
+    // small overflow set instead of allocating an unbounded rectangular grid.
+    const cellCount = (maxCx - minCx + 1) * (maxCy - minCy + 1);
+    if (!Number.isFinite(cellCount) || cellCount > 4096) {
+      this.oversized.add(item.id);
+      return;
+    }
+    const keys: string[] = [];
+
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cy = minCy; cy <= maxCy; cy++) {
         const key = this.cellKey(cx, cy);
+        keys.push(key);
         let cell = this.grid.get(key);
         if (!cell) {
           cell = new Set();
@@ -58,6 +72,27 @@ export class SpatialIndex {
         cell.add(item);
       }
     }
+    this.memberships.set(item.id, keys);
+  }
+
+  remove(id: string): void {
+    const item = this.items.get(id);
+    if (!item) return;
+    for (const key of this.memberships.get(id) || []) {
+      const cell = this.grid.get(key);
+      cell?.delete(item);
+      if (cell?.size === 0) this.grid.delete(key);
+    }
+    this.memberships.delete(id);
+    this.oversized.delete(id);
+    this.items.delete(id);
+  }
+
+  /** Reconcile snapshots without rebuilding cells for unchanged objects. */
+  sync(items: SpatialItem[]): void {
+    const ids = new Set(items.map(item => item.id));
+    for (const id of this.items.keys()) if (!ids.has(id)) this.remove(id);
+    for (const item of items) this.insert(item);
   }
 
   query(range: AABB): SpatialItem[] {
@@ -67,6 +102,15 @@ export class SpatialIndex {
     const maxCy = Math.floor(range.maxY / this.cellSize);
 
     const found = new Map<string, SpatialItem>();
+
+    const cellCount = (maxCx - minCx + 1) * (maxCy - minCy + 1);
+    if (!Number.isFinite(cellCount) || cellCount > 4096) {
+      return [...this.items.values()].filter(item => aabbIntersects(item.bounds, range));
+    }
+    for (const id of this.oversized) {
+      const item = this.items.get(id)!;
+      if (aabbIntersects(item.bounds, range)) found.set(id, item);
+    }
 
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cy = minCy; cy <= maxCy; cy++) {
@@ -88,6 +132,8 @@ export class SpatialIndex {
   clear(): void {
     this.grid.clear();
     this.items.clear();
+    this.memberships.clear();
+    this.oversized.clear();
   }
 
   rebuild(items: SpatialItem[]): void {

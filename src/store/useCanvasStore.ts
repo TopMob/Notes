@@ -446,7 +446,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       }
 
       globalCommandStack.clear();
-      spatialIndex.rebuild([...strokes, ...shapes]);
+      spatialIndex.sync([...strokes, ...shapes]);
 
       set({
         currentPageId: pageId,
@@ -485,7 +485,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         undo: () => {
           set((state) => {
             const nextStrokes = state.strokes.filter((s) => s.id !== stroke.id);
-            spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+            spatialIndex.sync([...nextStrokes, ...state.shapes]);
             return { strokes: nextStrokes };
           });
           if (pageId) {
@@ -514,7 +514,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         execute: () => {
           set((state) => {
             const nextStrokes = state.strokes.filter((s) => !idsSet.has(s.id));
-            spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+            spatialIndex.sync([...nextStrokes, ...state.shapes]);
             return { strokes: nextStrokes };
           });
           if (pageId) {
@@ -529,7 +529,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         undo: () => {
           set((state) => {
             const nextStrokes = [...state.strokes, ...deletedStrokes];
-            spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+            spatialIndex.sync([...nextStrokes, ...state.shapes]);
             return { strokes: nextStrokes };
           });
           if (pageId) {
@@ -554,7 +554,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
       set((state) => {
         const nextStrokes = state.strokes.filter((s) => !idsSet.has(s.id));
-        spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+        spatialIndex.sync([...nextStrokes, ...state.shapes]);
         return { strokes: nextStrokes };
       });
       if (pageId) {
@@ -584,7 +584,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
                 nextStrokes.push(s);
               }
             }
-            spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+            spatialIndex.sync([...nextStrokes, ...state.shapes]);
             return { strokes: nextStrokes };
           });
           if (pageId) {
@@ -608,7 +608,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             }
             const filtered = state.strokes.filter((s) => !newPartIds.has(s.id));
             const restored = [...filtered, ...previousStrokes];
-            spatialIndex.rebuild([...restored, ...state.shapes]);
+            spatialIndex.sync([...restored, ...state.shapes]);
             return { strokes: restored };
           });
           if (pageId) {
@@ -646,7 +646,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             nextStrokes.push(s);
           }
         }
-        spatialIndex.rebuild([...nextStrokes, ...state.shapes]);
+        spatialIndex.sync([...nextStrokes, ...state.shapes]);
         return { strokes: nextStrokes };
       });
       if (pageId) {
@@ -670,7 +670,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const removedIds = currentStrokes.filter((s) => !nextStrokeIds.has(s.id)).map((s) => s.id);
 
       set({ strokes });
-      spatialIndex.rebuild([...strokes, ...get().shapes]);
+      spatialIndex.sync([...strokes, ...get().shapes]);
       if (pageId) {
         const d = getOrCreateDirty(pageId);
         for (const s of strokes) {
@@ -705,7 +705,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         undo: () => {
           set((state) => {
             const nextShapes = state.shapes.filter((s) => s.id !== shape.id);
-            spatialIndex.rebuild([...state.strokes, ...nextShapes]);
+            spatialIndex.sync([...state.strokes, ...nextShapes]);
             return { shapes: nextShapes };
           });
           if (pageId) {
@@ -728,7 +728,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         execute: () => {
           set((state) => {
             const nextShapes = state.shapes.filter((s) => s.id !== shapeId);
-            spatialIndex.rebuild([...state.strokes, ...nextShapes]);
+            spatialIndex.sync([...state.strokes, ...nextShapes]);
             return { shapes: nextShapes };
           });
           if (pageId) {
@@ -741,7 +741,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         undo: () => {
           set((state) => {
             const nextShapes = [...state.shapes, targetShape];
-            spatialIndex.rebuild([...state.strokes, ...nextShapes]);
+            spatialIndex.sync([...state.strokes, ...nextShapes]);
             return { shapes: nextShapes };
           });
           if (pageId) {
@@ -764,7 +764,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
       set((state) => {
         const nextShapes = state.shapes.filter((s) => !idsSet.has(s.id));
-        spatialIndex.rebuild([...state.strokes, ...nextShapes]);
+        spatialIndex.sync([...state.strokes, ...nextShapes]);
         return { shapes: nextShapes };
       });
       if (pageId) {
@@ -784,7 +784,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const removedIds = currentShapes.filter((s) => !nextShapeIds.has(s.id)).map((s) => s.id);
 
       set({ shapes });
-      spatialIndex.rebuild([...get().strokes, ...shapes]);
+      spatialIndex.sync([...get().strokes, ...shapes]);
       if (pageId) {
         const d = getOrCreateDirty(pageId);
         for (const s of shapes) {
@@ -817,6 +817,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
       globalCommandStack.execute({
         execute: () => {
+          spatialIndex.sync([...get().strokes, ...updatedShapes]);
           set({ shapes: updatedShapes });
           if (currentPageId) {
             const d = getOrCreateDirty(currentPageId);
@@ -827,6 +828,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           }
         },
         undo: () => {
+          spatialIndex.sync([...get().strokes, ...prevShapes]);
           set({ shapes: prevShapes });
           if (currentPageId) {
             const d = getOrCreateDirty(currentPageId);
@@ -986,7 +988,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         const nextStrokes = state.strokes.map((s) => {
           if (!strokeSet.has(s.id)) return s;
           const updatedPoints = s.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy }));
-          return {
+          const moved = {
             ...s,
             points: updatedPoints,
             bounds: {
@@ -996,11 +998,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
               maxY: s.bounds.maxY + dy,
             },
           };
+          spatialIndex.insert(moved);
+          return moved;
         });
 
         const nextShapes = state.shapes.map((sh) => {
           if (!shapeSet.has(sh.id)) return sh;
-          return {
+          const moved = {
             ...sh,
             anchor: { ...sh.anchor, x: sh.anchor.x + dx, y: sh.anchor.y + dy },
             end: { ...sh.end, x: sh.end.x + dx, y: sh.end.y + dy },
@@ -1011,6 +1015,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
               maxY: sh.bounds.maxY + dy,
             },
           };
+          spatialIndex.insert(moved);
+          return moved;
         });
 
         const nextTextBlocks = state.textBlocks.map((tb) => {
@@ -1018,7 +1024,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           return { ...tb, x: tb.x + dx, y: tb.y + dy };
         });
 
-        spatialIndex.rebuild([...nextStrokes, ...nextShapes]);
 
         return {
           strokes: nextStrokes,
@@ -1056,7 +1061,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             shapes: currentShapes,
             textBlocks: currentTextBlocks,
           });
-          spatialIndex.rebuild([...currentStrokes, ...currentShapes]);
+          spatialIndex.sync([...currentStrokes, ...currentShapes]);
           if (pageId) {
             const d = getOrCreateDirty(pageId);
             for (const s of currentStrokes) d.strokesPut.set(s.id, s);
@@ -1071,7 +1076,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             shapes: prevShapes,
             textBlocks: prevTextBlocks,
           });
-          spatialIndex.rebuild([...prevStrokes, ...prevShapes]);
+          spatialIndex.sync([...prevStrokes, ...prevShapes]);
           if (pageId) {
             const d = getOrCreateDirty(pageId);
             for (const s of prevStrokes) d.strokesPut.set(s.id, s);
@@ -1103,7 +1108,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             const nextStrokes = state.strokes.filter((s) => !strokeSet.has(s.id));
             const nextShapes = state.shapes.filter((sh) => !shapeSet.has(sh.id));
             const nextTextBlocks = state.textBlocks.filter((tb) => !tbSet.has(tb.id));
-            spatialIndex.rebuild([...nextStrokes, ...nextShapes]);
+            spatialIndex.sync([...nextStrokes, ...nextShapes]);
 
             return {
               strokes: nextStrokes,
@@ -1136,7 +1141,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             const nextStrokes = [...state.strokes, ...deletedStrokes];
             const nextShapes = [...state.shapes, ...deletedShapes];
             const nextTextBlocks = [...state.textBlocks, ...deletedTextBlocks];
-            spatialIndex.rebuild([...nextStrokes, ...nextShapes]);
+            spatialIndex.sync([...nextStrokes, ...nextShapes]);
 
             return {
               strokes: nextStrokes,

@@ -3,6 +3,33 @@ import assert from 'node:assert/strict';
 import { getStroke } from 'perfect-freehand';
 import { loadTs } from './helpers/load-ts.mjs';
 
+test('incremental spatial index matches brute force across moves, deletes, snapshots and huge bounds', () => {
+  const { SpatialIndex, aabbIntersects } = loadTs('src/canvas/engine/SpatialIndex.ts');
+  const index = new SpatialIndex(); const items = new Map();
+  let seed = 17;
+  const random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2**32);
+  for (let i = 0; i < 500; i++) {
+    const id = `s${Math.floor(random()*60)}`;
+    if (i % 4 === 0) { items.delete(id); index.remove(id); }
+    else {
+      const x = random()*10000-5000, y = random()*10000-5000;
+      const item = {id,bounds:{minX:x,minY:y,maxX:x+800,maxY:y+700}};
+      items.set(id,item); index.insert(item);
+    }
+    if (i % 7 === 0) index.sync([...items.values()]);
+    const x = random()*8000-4000, y = random()*8000-4000;
+    const range = {minX:x,minY:y,maxX:x+2000,maxY:y+2000};
+    assert.deepEqual(index.query(range).map(x=>x.id).sort(), [...items.values()].filter(x=>aabbIntersects(x.bounds,range)).map(x=>x.id).sort());
+  }
+  const huge = {id:'huge',bounds:{minX:-1e9,minY:-1e9,maxX:1e9,maxY:1e9}};
+  index.insert(huge);
+  assert.ok(index.query({minX:0,minY:0,maxX:1,maxY:1}).includes(huge));
+  assert.equal(index.query(huge.bounds).length, items.size+1);
+  const updated = {...huge,color:'red'}; index.insert(updated);
+  assert.equal(index.query({minX:0,minY:0,maxX:1,maxY:1}).find(x=>x.id==='huge'), updated);
+  index.sync([]); assert.deepEqual(index.query(huge.bounds), []);
+});
+
 test('visual frames coalesce, use latest work and cancel safely on page leave', () => {
   const callbacks = new Map(); let id = 0;
   globalThis.requestAnimationFrame = callback => { callbacks.set(++id, callback); return id; };
